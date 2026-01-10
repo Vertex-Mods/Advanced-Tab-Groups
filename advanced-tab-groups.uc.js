@@ -1908,13 +1908,16 @@ class AdvancedTabGroups {
 // Initialize when the page loads
 (function () {
   if (!globalThis.advancedTabGroups) {
-    window.addEventListener(
-      "load",
-      () => {
-        console.log("[AdvancedTabGroups] Page loaded, initializing");
+    function initATG() {
+        console.log("[AdvancedTabGroups] Initializing");
         globalThis.advancedTabGroups = new AdvancedTabGroups();
-      }
-    );
+    }
+    
+    if (document.readyState === "complete") {
+        initATG();
+    } else {
+        window.addEventListener("load", initATG);
+    }
 
     // Clean up when the page is about to unload
     window.addEventListener("beforeunload", () => {

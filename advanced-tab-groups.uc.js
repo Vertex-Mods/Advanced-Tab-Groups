@@ -586,7 +586,7 @@ class AdvancedTabGroups {
       );
 
       // Check if the gradient picker is available
-      if (window.nsZenThemePicker && window.gZenThemePicker) {
+      if (window.gZenThemePicker) {
         // Store reference to current group for color application
         window.gZenThemePicker._currentTabGroup = group;
 

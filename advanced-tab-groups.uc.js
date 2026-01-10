@@ -6,6 +6,8 @@
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
 /* ====== v3.2.1b ====== */
 
+const UC_API = ChromeUtils.importESModule("chrome://userchromejs/content/uc_api.sys.mjs");
+
 class AdvancedTabGroups {
   constructor() {
     this.init();

@@ -1913,8 +1913,7 @@ class AdvancedTabGroups {
       () => {
         console.log("[AdvancedTabGroups] Page loaded, initializing");
         globalThis.advancedTabGroups = new AdvancedTabGroups();
-      },
-      { once: true }
+      }
     );
 
     // Clean up when the page is about to unload

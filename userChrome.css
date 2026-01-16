@@ -1,6 +1,6 @@
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ====== v3.2.1b ====== */
+/* ====== v3.3.0s ====== */
 tab-group:not([split-view-group]) {
   --advanced-tab-color: var(--tab-group-color);
   --tab-group-color-pale: transparent !important;

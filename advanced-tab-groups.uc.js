@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ====== v3.2.1b ====== */
+/* ====== v3.3.0s ====== */
 
 const UC_API = ChromeUtils.importESModule("chrome://userchromejs/content/uc_api.sys.mjs");
 

@@ -986,14 +986,13 @@ class AdvancedTabGroups {
                     );
 
                     // Set the --tab-group-color CSS variable on the group
-                    currentTabGroup.style.setProperty(
-                      "--tab-group-color",
+                    document.head.style.setProperty(
+                      `--tab-group-color-${currentTabGroup.id}`,
                       gradient
                     );
 
-                    // For simplicity, set the inverted color to the same value
-                    currentTabGroup.style.setProperty(
-                      "--tab-group-color-invert",
+                    document.head.style.setProperty(
+                      `--tab-group-color-${currentTabGroup.id}-invert`,
                       gradient
                     );
 
@@ -1186,9 +1185,9 @@ class AdvancedTabGroups {
                     const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
                     // Set the --tab-group-color CSS variable
-                    group.style.setProperty("--tab-group-color", colorString);
-                    group.style.setProperty(
-                      "--tab-group-color-invert",
+                    document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                    document.head.style.setProperty(
+                      `--tab-group-color-${group.id}-invert`,
                       colorString
                     );
 
@@ -1210,9 +1209,9 @@ class AdvancedTabGroups {
                   const finalColor = self._calculateAverageColor(colors);
                   const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                  group.style.setProperty("--tab-group-color", colorString);
-                  group.style.setProperty(
-                    "--tab-group-color-invert",
+                  document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                  document.head.style.setProperty(
+                    `--tab-group-color-${group.id}-invert`,
                     colorString
                   );
 
@@ -1230,9 +1229,9 @@ class AdvancedTabGroups {
                 const finalColor = self._calculateAverageColor(colors);
                 const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                group.style.setProperty("--tab-group-color", colorString);
-                group.style.setProperty(
-                  "--tab-group-color-invert",
+                document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                document.head.style.setProperty(
+                  `--tab-group-color-${group.id}-invert`,
                   colorString
                 );
 
@@ -1250,8 +1249,11 @@ class AdvancedTabGroups {
                   const finalColor = self._calculateAverageColor(colors);
                   const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                  group.style.setProperty("--tab-group-color", colorString);
-                  group.style.setProperty("--tab-group-color-invert", colorString);
+                  document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                  document.head.style.setProperty(
+                    `--tab-group-color-${group.id}-invert`,
+                    colorString
+                  );
 
                   self.saveTabGroupColors();
                 }
@@ -1267,8 +1269,11 @@ class AdvancedTabGroups {
               const finalColor = self._calculateAverageColor(colors);
               const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-              group.style.setProperty("--tab-group-color", colorString);
-              group.style.setProperty("--tab-group-color-invert", colorString);
+              document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+              document.head.style.setProperty(
+                `--tab-group-color-${group.id}-invert`,
+                colorString
+              );
 
               self.saveTabGroupColors();
             }

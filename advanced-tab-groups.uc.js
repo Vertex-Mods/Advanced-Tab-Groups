@@ -439,66 +439,26 @@ class AdvancedTabGroups {
         ".convert-group-to-folder"
       );
 
-      if (setGroupColorItem) {
-        setGroupColorItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group && typeof group._setGroupColor === "function") {
-            group._setGroupColor();
-          }
-        });
-      }
+      const menuItems = [
+        [setGroupColorItem, "_setGroupColor"],
+        [useFaviconColorItem, "_useFaviconColor"],
+        [renameGroupItem, this.renameGroupStart],
+        [changeGroupIconItem, this.changeGroupIcon],
+        [ungroupTabsItem, "ungroupTabs"],
+        [convertToFolderItem, this.convertGroupToFolder]
+      ];
 
-      if (useFaviconColorItem) {
-        useFaviconColorItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group && typeof group._useFaviconColor === "function") {
-            group._useFaviconColor();
-          }
-        });
-      }
-
-      if (renameGroupItem) {
-        renameGroupItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Rename group command triggered for:", group.id);
-            this.renameGroupStart(group);
-          }
-        });
-      }
-
-      if (changeGroupIconItem) {
-        changeGroupIconItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Change icon command triggered for:", group.id);
-            this.changeGroupIcon(group);
-          }
-        });
-      }
-
-      if (ungroupTabsItem) {
-        ungroupTabsItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group && typeof group.ungroupTabs === "function") {
-            try {
-              console.log("[AdvancedTabGroups] Ungroup tabs command triggered for:", group.id);
-              group.ungroupTabs();
-            } catch (error) {
-              console.error("[AdvancedTabGroups] Error ungrouping tabs:", error);
+      for (const menuItem of menuItems) {
+        if (menuItem[0]) {
+          menuItem[0].addEventListener("command", () => {
+            const group = this._contextMenuCurrentGroup;
+            if (group && typeof group[menuItem[1]] === "function") {
+              group[menuItem[1]]();
+            } else if (group) {
+              menuItem[1](group);
             }
-          }
-        });
-      }
-
-      if (convertToFolderItem) {
-        convertToFolderItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Convert to folder command triggered for:", group.id);
-            this.convertGroupToFolder(group);
-          }
-        });
+          });
+        }
       }
 
       // Clear the current group when the menu closes (ready to be reused)

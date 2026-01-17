@@ -397,7 +397,7 @@ class AdvancedTabGroups {
       }
     } else {
       // For existing groups, also apply favicon color if no color is set
-      const currentColor = group.style.getPropertyValue("--tab-group-color");
+      const currentColor = document.head.style.getPropertyValue(`--tab-group-color-${group.id}`);
       if (!currentColor && typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
       }
@@ -1548,6 +1548,7 @@ class AdvancedTabGroups {
       const colors = this.savedColors;
       gBrowser.tabGroups.filter(group => group.tagName === "tab-group").forEach(group => {
         colors[group.id] = window.getComputedStyle(document.head).getPropertyValue(`--tab-group-color-${group.id}`);
+        group.color = group.id;
       });
       this.savedColors = colors;
     } catch (error) {

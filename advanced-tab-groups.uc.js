@@ -397,7 +397,7 @@ class AdvancedTabGroups {
       }
     } else {
       // For existing groups, also apply favicon color if no color is set
-      const currentColor = document.head.style.getPropertyValue(`--tab-group-color-${group.id}`);
+      const currentColor = document.documentElement.style.getPropertyValue(`--tab-group-color-${group.id}`);
       if (!currentColor && typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
       }
@@ -840,14 +840,14 @@ class AdvancedTabGroups {
                     );
 
                     // Set the --tab-group-color CSS variable on the group
-                    document.head.style.setProperty(
+                    document.documentElement.style.setProperty(
                       `--tab-group-color-${currentTabGroup.id}`,
                       gradient
                     );
 
                     // For simplicity, set the inverted color to the same value
                     // This simplifies the UI while maintaining the variable structure
-                    document.head.style.setProperty(
+                    document.documentElement.style.setProperty(
                       `--tab-group-color-${currentTabGroup.id}-invert`,
                       gradient
                     );
@@ -986,12 +986,12 @@ class AdvancedTabGroups {
                     );
 
                     // Set the --tab-group-color CSS variable on the group
-                    document.head.style.setProperty(
+                    document.documentElement.style.setProperty(
                       `--tab-group-color-${currentTabGroup.id}`,
                       gradient
                     );
 
-                    document.head.style.setProperty(
+                    document.documentElement.style.setProperty(
                       `--tab-group-color-${currentTabGroup.id}-invert`,
                       gradient
                     );
@@ -1185,8 +1185,8 @@ class AdvancedTabGroups {
                     const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
                     // Set the --tab-group-color CSS variable
-                    document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                    document.head.style.setProperty(
+                    document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                    document.documentElement.style.setProperty(
                       `--tab-group-color-${group.id}-invert`,
                       colorString
                     );
@@ -1209,8 +1209,8 @@ class AdvancedTabGroups {
                   const finalColor = self._calculateAverageColor(colors);
                   const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                  document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                  document.head.style.setProperty(
+                  document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                  document.documentElement.style.setProperty(
                     `--tab-group-color-${group.id}-invert`,
                     colorString
                   );
@@ -1229,8 +1229,8 @@ class AdvancedTabGroups {
                 const finalColor = self._calculateAverageColor(colors);
                 const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                document.head.style.setProperty(
+                document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                document.documentElement.style.setProperty(
                   `--tab-group-color-${group.id}-invert`,
                   colorString
                 );
@@ -1249,8 +1249,8 @@ class AdvancedTabGroups {
                   const finalColor = self._calculateAverageColor(colors);
                   const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-                  document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                  document.head.style.setProperty(
+                  document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+                  document.documentElement.style.setProperty(
                     `--tab-group-color-${group.id}-invert`,
                     colorString
                   );
@@ -1269,8 +1269,8 @@ class AdvancedTabGroups {
               const finalColor = self._calculateAverageColor(colors);
               const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
 
-              document.head.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-              document.head.style.setProperty(
+              document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
+              document.documentElement.style.setProperty(
                 `--tab-group-color-${group.id}-invert`,
                 colorString
               );
@@ -1575,8 +1575,8 @@ class AdvancedTabGroups {
   applySavedColors() {
     try {
       Object.entries(this.savedColors).forEach(([groupId, color]) => {
-        document.head.style.setProperty(`--tab-group-color-${groupId}`, color);
-        document.head.style.setProperty(`--tab-group-color-${groupId}-invert`, color);
+        document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, color);
+        document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, color);
       });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved colors:", error);

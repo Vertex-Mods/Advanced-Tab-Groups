@@ -167,6 +167,7 @@ tab-group:not([split-view-group]) {
 
         #tabbrowser-tabs[orient="vertical"] & {
           #tabbrowser-tabs[expanded] & {
+            margin-inline-end: var(--space-medium);
           }
         }
       }

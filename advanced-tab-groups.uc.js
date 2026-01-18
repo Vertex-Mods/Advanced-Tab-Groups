@@ -717,7 +717,7 @@ class AdvancedTabGroups {
             const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
 
             // Override the updateCurrentWorkspace method to prevent browser background changes
-            window.gZenThemePicker.updateCurrentWorkspace = async () => {
+            window.gZenThemePicker.updateCurrentWorkspace = () => {
               // Apply the color to our tab group
               try {
                 const colors = calculateColor();
@@ -1246,7 +1246,7 @@ class AdvancedTabGroups {
   }
 
   // Remove saved color for a specific tab group
-  async removeSavedColor(groupId) {
+  removeSavedColor(groupId) {
     try {
       const colors = this.savedColors;
       delete colors.groupId;
@@ -1257,7 +1257,7 @@ class AdvancedTabGroups {
   }
 
   // Save group icon to persistent storage
-  async saveGroupIcon(groupId, iconUrl) {
+  saveGroupIcon(groupId, iconUrl) {
     try {
       const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
       icons[groupId] = iconUrl;
@@ -1268,7 +1268,7 @@ class AdvancedTabGroups {
   }
 
   // Load saved group icons from persistent storage
-  async loadGroupIcons() {
+  loadGroupIcons() {
     try {
       const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
 
@@ -1317,7 +1317,7 @@ class AdvancedTabGroups {
   }
 
   // Remove saved icon for a specific tab group
-  async removeSavedIcon(groupId) {
+  removeSavedIcon(groupId) {
     try {
       const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
       delete icons[groupId];

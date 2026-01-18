@@ -9,6 +9,8 @@
 window.UC_API = ChromeUtils.importESModule("chrome://userchromejs/content/uc_api.sys.mjs");
 
 class AdvancedTabGroups {
+  #initTabGroupListener;
+
   constructor() {
     this.init();
   }
@@ -34,11 +36,6 @@ class AdvancedTabGroups {
 
     // Also try again after a delay to catch any missed groups
     setTimeout(() => this.processExistingGroups(), 1000);
-
-    // Set up periodic saving of colors (every 30 seconds)
-    setInterval(() => {
-      this.saveTabGroupColors();
-    }, 30000);
 
     // Listen for tab group creation events from the platform component
     document.addEventListener(
@@ -180,6 +177,10 @@ class AdvancedTabGroups {
 
   get tabGroups() {
     return gBrowser.tabGroups.filter(group => group.tagName === "tab-group");
+  }
+
+  getGroupById(groupId) {
+    return this.tabGroups.find(group => group.id === groupId);
   }
 
   processExistingGroups() {
@@ -341,6 +342,8 @@ class AdvancedTabGroups {
     ) {
       // Start renaming
       this.renameGroupStart(group, false); // Don't select all for new groups
+      // Ensure the color is set to the id
+      group.color = group.id;
       // Set color to average favicon color
       if (typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
@@ -642,6 +645,10 @@ class AdvancedTabGroups {
     };
 
     group._setGroupColor = () => {
+      if (this.getGroupById(group.id).color) {
+        this.getGroupById(group.id).color = group.id;
+      }
+
       // Check if the gradient picker is available
       if (window.gZenThemePicker) {
         // Try to find and click an existing button that opens the gradient picker
@@ -651,64 +658,48 @@ class AdvancedTabGroups {
             "zenToolbarThemePicker"
           );
           if (existingButton) {
-            console.log(
-              "[AdvancedTabGroups] Found existing gradient picker button, clicking it"
-            );
-
             // Store original methods for restoration
             const originalUpdateMethod =
               window.gZenThemePicker.updateCurrentWorkspace;
 
-            // Capture AdvancedTabGroups instance for callbacks inside overrides
-            const atg = this;
+            const resetPickerDots = () => {
+                for (const dot of gZenThemePicker.panel.querySelectorAll(".zen-theme-picker-dot")) {
+                  dot.remove();
+                }
+                gZenThemePicker.dots = [];
+            }
 
             const calculateColor = () => {
-              const dots = window.gZenThemePicker.panel.querySelectorAll(
-                ".zen-theme-picker-dot"
-              );
+              const dots = gZenThemePicker.panel.querySelectorAll(".zen-theme-picker-dot");
               const colors = Array.from(dots)
+                .sort((a, b) => a.getAttribute("data-index") - b.getAttribute("data-index"))
                 .map((dot) => {
-                  if (!dot || !dot.style) {
-                    return null;
-                  }
-                
-                  const colorValue = dot.style.getPropertyValue(
-                    "--zen-theme-picker-dot-color"
-                  );
-                  if (!colorValue || colorValue === "undefined") {
-                    return null;
-                  }
-                
+                  const color = dot.style.getPropertyValue("--zen-theme-picker-dot-color");
                   const isPrimary = dot.classList.contains("primary");
-                  const type = dot.getAttribute("data-type");
-                
-                  // Handle both RGB and hex colors
-                  let rgb;
-                  if (colorValue.startsWith("rgb")) {
-                    rgb = colorValue.match(/\d+/g)?.map(Number) || [0, 0, 0];
-                  } else if (colorValue.startsWith("#")) {
-                    // Convert hex to RGB
-                    const hex = colorValue.replace("#", "");
-                    rgb = [
-                      parseInt(hex.substr(0, 2), 16),
-                      parseInt(hex.substr(2, 2), 16),
-                      parseInt(hex.substr(4, 2), 16),
-                    ];
-                  } else {
-                    rgb = [0, 0, 0];
+
+                  if (color === "undefined") {
+                    return null;
                   }
-                
+                  const isCustom = dot.classList.contains("custom");
+                  const algorithm = this.useAlgo;
+                  const position =
+                    dot.getAttribute("data-position") && JSON.parse(dot.getAttribute("data-position"));
+                  const type = dot.getAttribute("data-type");
                   return {
-                    c: rgb,
-                    isPrimary: isPrimary,
-                    type: type,
+                    c: isCustom ? color : color.match(/\d+/g).map(Number),
+                    isCustom,
+                    algorithm,
+                    isPrimary,
+                    lightness: 50,
+                    position,
+                    type,
                   };
                 })
-                .filter(Boolean);
+                .filter((color) => Boolean(color));
               
               if (colors.length > 0) {
                 // Check both references to ensure we don't lose the tab group
-                const gradient = window.gZenThemePicker.getGradient(colors);
+                const gradient = gZenThemePicker.getGradient(colors);
               
                 // Set the --tab-group-color CSS variable on the group
                 document.documentElement.style.setProperty(
@@ -720,20 +711,14 @@ class AdvancedTabGroups {
                   `--tab-group-color-${group.id}-invert`,
                   gradient
                 );
-              
-                // Save the color to persistent storage (use plugin instance)
-                atg.saveTabGroupColors();
+
+                return colors;
               }
             }
 
             // Override the updateCurrentWorkspace method to prevent browser background changes
             window.gZenThemePicker.updateCurrentWorkspace = async () => {
-              // Only block browser changes if we're setting tab group colors
-              console.log(
-                "[AdvancedTabGroups] Blocking browser background change, applying to tab group instead"
-              );
-              // Don't call the original method - this prevents browser background changes
-              // Instead, just apply the color to our tab group
+              // Apply the color to our tab group
               try {
                 calculateColor();
               } catch (error) {
@@ -747,30 +732,35 @@ class AdvancedTabGroups {
             // Now click the button to open the picker
             existingButton.click();
 
+            resetPickerDots();
+
+            const colors = this.savedColors[group.id];
+            if (colors && typeof colors === "object" && colors.length) {
+              document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add")
+                .setAttribute("hidden", "true");
+              gZenThemePicker.recalculateDots(colors ?? []);
+            }
+
             // Set up a listener for when the panel closes to apply the final color and cleanup
             const panel = window.gZenThemePicker.panel;
             const handlePanelClose = () => {
               try {
                 // Get the final color from the dots using the same logic
-                calculateColor();
+                const colors = this.savedColors;
+                colors[group.id] = calculateColor();
+                this.savedColors = colors;
 
                 // CRITICAL: Clean up all references and restore original methods
                 window.gZenThemePicker.updateCurrentWorkspace =
                   originalUpdateMethod;
 
+                resetPickerDots();
+                gZenThemePicker.recalculateDots(
+                  gZenWorkspaces.getActiveWorkspace().theme.gradientColors
+                );
+
                 // Remove the event listener
                 panel.removeEventListener("popuphidden", handlePanelClose);
-
-                // Clear any stored color data to prevent persistence
-                if (window.gZenThemePicker.dots) {
-                  window.gZenThemePicker.dots.forEach((dot) => {
-                    if (dot.element && dot.element.style) {
-                      dot.element.style.removeProperty(
-                        "--zen-theme-picker-dot-color"
-                      );
-                    }
-                  });
-                }
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error during cleanup:",
@@ -906,7 +896,7 @@ class AdvancedTabGroups {
                 }
               }
               
-              gBrowser.tabGroups.find(g => g.id === group.id).color = `${group.id}-favicon`;
+              this.getGroupById(group.id).color = `${group.id}-favicon`;
             };
 
             img.onerror = () => {
@@ -1232,27 +1222,17 @@ class AdvancedTabGroups {
   }
 
   // Save tab group colors to persistent storage
-  async saveTabGroupColors() {
-    try {
-      const colors = this.savedColors;
-      this.tabGroups.forEach(group => {
-        colors[group.id] = window.getComputedStyle(document.head).getPropertyValue(`--tab-group-color-${group.id}`);
-        group.color = group.id;
-      });
-      this.savedColors = colors;
-    } catch (error) {
-      console.error(
-        "[AdvancedTabGroups] Error saving tab group colors:",
-        error
-      );
-    }
+  saveTabGroupColors() {
+    const colors = this.savedColors;
+    this.tabGroups.forEach(group => {
+      colors[group.id] = window.getComputedStyle(document.head).getPropertyValue(`--tab-group-color-${group.id}`);
+    });
+    this.savedColors = colors;
   }
 
   get savedColors() {
     const colors = SessionStore.getCustomWindowValue(window, "tabGroupColors");
-    console.log("WE KNOW:", colors)
     if (colors !== "") {
-      console.log("WE KNOW:", colors)
       return JSON.parse(colors);
     }
     return {};
@@ -1266,10 +1246,10 @@ class AdvancedTabGroups {
   applySavedColors() {
     try {
       setTimeout(() => {
-        console.log("ATG LIST: ", this.savedColors)
         Object.entries(this.savedColors).forEach(([groupId, color]) => {
-          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, color);
-          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, color);
+          const gradient = gZenThemePicker.getGradient(color);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
         });
       }, 1000);
     } catch (error) {
@@ -1363,7 +1343,7 @@ class AdvancedTabGroups {
     try {
       Object.entries(icons).forEach(([groupId, iconUrl]) => {
         // Try to find the group using gBrowser.tabGroups first
-        let group = gBrowser.tabGroups.find(g => g.id === groupId);
+        let group = this.getGroupById(groupId);
         
         if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
           const iconContainer = group.querySelector(
@@ -1462,7 +1442,7 @@ class AdvancedTabGroups {
           refreshVisibility: () => globalThis.advancedTabGroups.refreshGroupVisibility(),
           processExisting: () => globalThis.advancedTabGroups.processExistingGroups(),
           getGroups: () => {
-            return gBrowser.tabGroups.map(g => ({
+            return this.tabGroups.map(g => ({
               id: g.id,
               label: g.label,
               hasContextMenu: !!g._contextMenuAdded,
@@ -1479,13 +1459,6 @@ class AdvancedTabGroups {
     } else {
         window.addEventListener("load", initATG);
     }
-
-    // Clean up when the page is about to unload
-    window.addEventListener("beforeunload", () => {
-      if (globalThis.advancedTabGroups) {
-        globalThis.advancedTabGroups.saveTabGroupColors();
-      }
-    });
 
     // Hide tab group menu items for folders and inactive workspace groups in tab context menu
     const tabContextMenu = document.getElementById("tabContextMenu");

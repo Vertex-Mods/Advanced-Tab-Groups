@@ -2,7 +2,6 @@
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
 /* ====== v3.3.0s ====== */
 tab-group:not([split-view-group]) {
-  --tab-group-color-pale: transparent !important;
     --tab-group-stroke: light-dark(
     color-mix(in srgb, var(--zen-primary-color) 60%, black),
     color-mix(in srgb, var(--zen-colors-primary) 20%, var(--toolbox-textcolor)));
@@ -45,6 +44,7 @@ tab-group:not([split-view-group]) {
       border-radius: 4px;
       position: relative;
       fill: var(--tab-group-stroke) !important;
+      background: var(--tab-group-color);
       &[zen-emoji-open='true']::before {
         border: 1px dashed light-dark(rgba(0, 0, 0, .5), rgba(255, 255, 255, .5));
         border-radius: 6px;
@@ -96,7 +96,7 @@ tab-group:not([split-view-group]) {
       position: absolute;
       left: -2px !important;
       top: 0;
-      background: var(--advanced-tab-color);
+      background: var(--tab-group-color);
       height: 100%;
       width: 2px;
       pointer-events: none !important;

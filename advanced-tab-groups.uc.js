@@ -1105,22 +1105,6 @@ class AdvancedTabGroups {
   // Change group icon using the Zen emoji picker (SVG icons only)
   async changeGroupIcon(group) {
     try {
-      // Check if the Zen emoji picker is available
-      if (!window.gZenEmojiPicker) {
-        console.error("[AdvancedTabGroups] Zen emoji picker not available");
-        return;
-      }
-
-      // Find the icon container in the group
-      const iconContainer = group.querySelector(".tab-group-icon-container");
-      if (!iconContainer) {
-        console.error(
-          "[AdvancedTabGroups] Icon container not found for group:",
-          group.id
-        );
-        return;
-      }
-
       // Find the icon element (create if it doesn't exist)
       let iconElement = iconContainer.querySelector(".tab-group-icon");
       if (!iconElement) {
@@ -1277,33 +1261,9 @@ class AdvancedTabGroups {
   // Save group icon to persistent storage
   async saveGroupIcon(groupId, iconUrl) {
     try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        // Read current icons
-        let icons = {};
-        try {
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            icons = JSON.parse(fsResult.content());
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
-
-        // Update with new icon
-        icons[groupId] = iconUrl;
-
-        // Save to file
-        const jsonData = JSON.stringify(icons, null, 2);
-        await UC_API.FileSystem.writeFile("tab_group_icons.json", jsonData);
-      } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        let icons = savedIcons ? JSON.parse(savedIcons) : {};
-        icons[groupId] = iconUrl;
-        localStorage.setItem("advancedTabGroups_icons", JSON.stringify(icons));
-      }
+      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+      icons[groupId] = iconUrl;
+      SessionStore.setCustomWindowValue(window, "tabGroupIcons", icons);
     } catch (error) {
       console.error("[AdvancedTabGroups] Error saving group icon:", error);
     }
@@ -1312,26 +1272,7 @@ class AdvancedTabGroups {
   // Load saved group icons from persistent storage
   async loadGroupIcons() {
     try {
-      let icons = {};
-
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            icons = JSON.parse(fsResult.content());
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
-      } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        if (savedIcons) {
-          icons = JSON.parse(savedIcons);
-        }
-      }
+      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
 
       // Apply icons to existing groups
       if (Object.keys(icons).length > 0) {
@@ -1380,35 +1321,9 @@ class AdvancedTabGroups {
   // Remove saved icon for a specific tab group
   async removeSavedIcon(groupId) {
     try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          // Read current icons
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            const icons = JSON.parse(fsResult.content());
-            delete icons[groupId];
-
-            // Save updated icons
-            const jsonData = JSON.stringify(icons, null, 2);
-            await UC_API.FileSystem.writeFile("tab_group_icons.json", jsonData);
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
-      } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        if (savedIcons) {
-          const icons = JSON.parse(savedIcons);
-          delete icons[groupId];
-          localStorage.setItem(
-            "advancedTabGroups_icons",
-            JSON.stringify(icons)
-          );
-        }
-      }
+      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+      delete icons[groupId];
+      SessionStore.setCustomWindowValue(window, "tabGroupIcons", icons);
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved icon:", error);
     }

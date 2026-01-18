@@ -716,11 +716,18 @@ class AdvancedTabGroups {
               }
             }
 
+            const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
+
             // Override the updateCurrentWorkspace method to prevent browser background changes
             window.gZenThemePicker.updateCurrentWorkspace = async () => {
               // Apply the color to our tab group
               try {
-                calculateColor();
+                const colors = calculateColor();
+                if (colors && colors.length) {
+                  clickToAdd.setAttribute("hidden", "true");
+                } else {
+                  clickToAdd.removeAttribute("hidden");
+                }
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error applying color to group:",
@@ -736,8 +743,7 @@ class AdvancedTabGroups {
 
             const colors = this.savedColors[group.id];
             if (colors && typeof colors === "object" && colors.length) {
-              document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add")
-                .setAttribute("hidden", "true");
+              clickToAdd.setAttribute("hidden", "true");
               gZenThemePicker.recalculateDots(colors ?? []);
             }
 

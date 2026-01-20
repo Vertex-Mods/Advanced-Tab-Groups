@@ -90,10 +90,40 @@ class AdvancedTabGroups {
     });
   }
 
+  waitForElm(selector) {
+    return new Promise(resolve => {
+      const el = document.querySelector(selector);
+      if (el) {
+        return resolve(el);
+      }
+    
+      const observer = new MutationObserver(() => {
+        const el = document.querySelector(selector);
+        if (el) {
+          observer.disconnect();
+          resolve(el);
+        }
+      });
+    
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+    });
+  }
+
   waitForDependencies() {
     return new Promise((resolve) => {
       const id = setInterval(() => {
-        const depsExist = window.hasOwnProperty("SessionStore");
+        const deps = ["SessionStore", "gZenWorkspaces"]
+        
+        let depsExist = true;
+        for (const dep of deps) {
+          if (!window.hasOwnProperty(dep)) {
+            depsExist = false;
+          }
+        }
+
         if (depsExist) {
           clearInterval(id);
           resolve();
@@ -104,34 +134,29 @@ class AdvancedTabGroups {
 
   // Set up observer for workspace changes to update group visibility
   setupWorkspaceObserver() {
-    // Listen for workspace changes
-    if (window.gZenWorkspaces) {
-      // Override the original workspace switching method to add our visibility update
-      const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
-      if (originalSwitchToWorkspace) {
-        window.gZenWorkspaces.switchToWorkspace = (...args) => {
-          const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
-          // Update group visibility after workspace switch
-          setTimeout(() => this.updateGroupVisibility(), 100);
-          return result;
-        };
-      }
-
-      // Also listen for workspace strip changes
-      const workspaceObserver = new MutationObserver(() => {
-        setTimeout(() => this.updateGroupVisibility(), 100);
+    // Override the original workspace switching method to add our visibility update
+    const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
+    window.gZenWorkspaces.switchToWorkspace = (...args) => {
+      const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
+      // Update group visibility after workspace switch
+      setTimeout(() => this.updateGroupVisibility(), 100);
+      return result;
+    };
+  
+    // Also listen for workspace strip changes
+    const workspaceObserver = new MutationObserver(() => {
+      setTimeout(() => this.updateGroupVisibility(), 100);
+    });
+  
+    // Observe changes to the workspace container
+    const workspaceContainer = document.querySelector("#zen-workspaces-button");
+    if (workspaceContainer) {
+      workspaceObserver.observe(workspaceContainer, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['selected', 'active']
       });
-
-      // Observe changes to the workspace container
-      const workspaceContainer = document.querySelector("#zen-workspaces-button");
-      if (workspaceContainer) {
-        workspaceObserver.observe(workspaceContainer, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['selected', 'active']
-        });
-      }
     }
   }
 
@@ -535,6 +560,21 @@ class AdvancedTabGroups {
     }, 1500);
   }
 
+  updateIconColor(group, colors) {
+    const groupIcon = group.querySelector(".group-icon");
+    // If the background is dark mode, we need to get the contrast of that (opposite).
+    const shouldBeDarkMode = !gZenThemePicker.shouldBeDarkMode(
+      gZenThemePicker.getMostDominantColor(colors)
+    );
+    if (groupIcon) {
+      if (shouldBeDarkMode) {
+        groupIcon.style.fill = "black";
+      } else {
+        groupIcon.style.fill = "white";
+      }
+    }
+  }
+
   // Handle platform-dispatched creation event for groups
   onTabGroupCreate(event) {
     try {
@@ -708,23 +748,32 @@ class AdvancedTabGroups {
                 })
                 .filter((color) => Boolean(color));
               
+              let gradient;
               if (colors.length > 0) {
-                // Check both references to ensure we don't lose the tab group
-                const gradient = gZenThemePicker.getGradient(colors);
-              
-                // Set the --tab-group-color CSS variable on the group
-                document.documentElement.style.setProperty(
-                  `--tab-group-color-${group.id}`,
-                  gradient
-                );
-              
-                document.documentElement.style.setProperty(
-                  `--tab-group-color-${group.id}-invert`,
-                  gradient
-                );
+                gradient = gZenThemePicker.getGradient(colors);
+                
+                this.updateIconColor(group, colors);
+              } else {
+                gradient = "transparent";
 
-                return colors;
+                const groupIcon = group.querySelector(".group-icon");
+                if (groupIcon) {
+                  groupIcon.style.fill = "light-dark(black, white)";
+                }
               }
+            
+              // Set the --tab-group-color CSS variable on the group
+              document.documentElement.style.setProperty(
+                `--tab-group-color-${group.id}`,
+                gradient
+              );
+            
+              document.documentElement.style.setProperty(
+                `--tab-group-color-${group.id}-invert`,
+                gradient
+              );
+            
+              return colors;
             }
 
             const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
@@ -1202,13 +1251,11 @@ class AdvancedTabGroups {
   // Apply saved colors to tab groups
   applySavedColors() {
     try {
-      setTimeout(() => {
-        Object.entries(this.savedColors).forEach(([groupId, color]) => {
-          const gradient = gZenThemePicker.getGradient(color);
-          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
-          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
-        });
-      }, 1000);
+      Object.entries(this.savedColors).forEach(([groupId, color]) => {
+        const gradient = gZenThemePicker.getGradient(color);
+        document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
+        document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
+      });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved colors:", error);
     }
@@ -1245,7 +1292,7 @@ class AdvancedTabGroups {
   }
 
   async applyGroupIcon(group, iconUrl = null) {
-    const iconContainer = group.querySelector(".tab-group-icon-container");
+    const iconContainer = await this.waitForElm(".tab-group-icon-container");
     let iconElement = iconContainer.querySelector(".tab-group-icon");
     if (!iconElement) {
       iconElement = document.createElement("div");
@@ -1255,7 +1302,9 @@ class AdvancedTabGroups {
 
     // Open the emoji picker with SVG icons only
     if (!iconUrl) {
-      iconUrl = await window.gZenEmojiPicker.open(iconElement);
+      iconUrl = await window.gZenEmojiPicker.open(iconElement, {
+        onlySvgIcons: !Services.prefs.getBoolPref("browser.tabs.groups.allow-emojis", false)
+      });
     }
   
     iconElement.innerHTML = "";
@@ -1272,6 +1321,8 @@ class AdvancedTabGroups {
         `);
       }
       iconElement.appendChild(imgFrag.firstElementChild);
+
+      this.updateIconColor(group, this.savedColors[group.id])
     
       // Save the icon to persistent storage
       this.saveGroupIcon(group.id, iconUrl);
@@ -1284,14 +1335,12 @@ class AdvancedTabGroups {
   // Apply saved icons to tab groups
   applySavedIcons() {
     try {
-      setTimeout(() => {
-        Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
-          const group = this.getGroupById(groupId);
-          if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-            this.applyGroupIcon(group, iconUrl);
-          }
-        });
-      }, 500);
+      Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
+        const group = this.getGroupById(groupId);
+        if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
+          this.applyGroupIcon(group, iconUrl);
+        }
+      });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved icons:", error);
     }

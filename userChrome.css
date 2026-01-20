@@ -58,6 +58,7 @@ tab-group:not([split-view-group]) {
         display: block;
         width: 12px;
         height: 12px;
+        fill: white;
         @media (-moz-pref("browser.tabs.groups.arc-style")) {
           width: 16px;
           height: 16px;
@@ -147,20 +148,25 @@ tab-group:not([split-view-group]) {
       
       .tab-group-icon-container {
         margin: 0 0 0 10px !important;
-          display: none !important;
+        display: none !important;
+
         .tab-group-icon {
           background: none !important;
         }
-          &:has(.group-icon) {
-            display: flex !important;
-          }
-          &:has(.tab-group-icon[zen-emoji-open='true']) {
-            display: flex !important;
-          }
-          & .group-icon {
-            width: 14px !important;
-            height: 14px !important;
-          }
+
+        &:has(.group-icon) {
+          display: flex !important;
+        }
+      
+        &:has(.tab-group-icon[zen-emoji-open='true']) {
+          display: flex !important;
+        }
+        
+        & .group-icon {
+          width: 14px !important;
+          height: 14px !important;
+          fill: light-dark(black, white) !important;
+        }
       }
 
       .tab-group-label {

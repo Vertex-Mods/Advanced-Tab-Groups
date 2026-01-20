@@ -55,13 +55,13 @@ tab-group:not([split-view-group]) {
       }
 
       .group-icon {
+        display: block;
         width: 12px;
         height: 12px;
-        @media (-moz-bool-pref: "browser.tabs.groups.arc-style") {
+        @media (-moz-pref("browser.tabs.groups.arc-style")) {
           width: 16px;
           height: 16px;
         }
-        display: block;
       }
 
       & label {
@@ -129,14 +129,13 @@ tab-group:not([split-view-group]) {
 }
 
 /* Arc-like group styling */
-@media (-moz-bool-pref: "browser.tabs.groups.arc-style") {
+@media (-moz-pref("browser.tabs.groups.arc-style")) {
   /* Hide the color context menu options */
   #advanced-tab-groups-context-menu {
     .change-group-color {
       display: none !important;
     }
   }
-  
   
   tab-group:not([split-view-group]) {
     .tab-group-label-container {

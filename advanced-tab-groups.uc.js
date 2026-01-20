@@ -13,12 +13,13 @@ class AdvancedTabGroups {
     this.init();
   }
 
-  init() {
-    // Load saved tab group colors
-    this.applySavedColors();
+  async init() {
+    // Wait for any dependencies before proceeding.
+    await this.waitForDependencies();
 
-    // Load saved tab group icons
-    this.loadGroupIcons();
+    // Load saved tab group settings
+    this.applySavedColors();
+    this.applySavedIcons();
 
     // Set up observer for all tab groups
     this.setupObserver();
@@ -86,6 +87,18 @@ class AdvancedTabGroups {
     observer.observe(document.body, {
       childList: true,
       subtree: true,
+    });
+  }
+
+  waitForDependencies() {
+    return new Promise((resolve) => {
+      const id = setInterval(() => {
+        const depsExist = window.hasOwnProperty("SessionStore");
+        if (depsExist) {
+          clearInterval(id);
+          resolve();
+        }
+      }, 50);
     });
   }
 
@@ -453,10 +466,10 @@ class AdvancedTabGroups {
         if (menuItem[0]) {
           menuItem[0].addEventListener("command", () => {
             const group = this._contextMenuCurrentGroup;
-            if (group && typeof group[menuItem[1]] === "function") {
-              group[menuItem[1]]();
+            if (group && typeof menuItem[1] === "function") {
+              menuItem[1].call(this, group);
             } else if (group) {
-              menuItem[1](group);
+              group[menuItem[1]]();
             }
           });
         }
@@ -786,10 +799,6 @@ class AdvancedTabGroups {
       }
     };
 
-    group._changeGroupIcon = () => {
-      this.changeGroupIcon(group);
-    };
-
     group._useFaviconColor = () => {
       // Capture 'this' for use in callbacks
       const self = this;
@@ -1104,6 +1113,7 @@ class AdvancedTabGroups {
   async changeGroupIcon(group) {
     try {
       // Find the icon element (create if it doesn't exist)
+      const iconContainer = group.querySelector(".tab-group-icon-container");
       let iconElement = iconContainer.querySelector(".tab-group-icon");
       if (!iconElement) {
         iconElement = document.createElement("div");
@@ -1249,68 +1259,62 @@ class AdvancedTabGroups {
   removeSavedColor(groupId) {
     try {
       const colors = this.savedColors;
-      delete colors.groupId;
+      delete colors[groupId];
       this.savedColors = colors;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved color:", error);
     }
   }
 
-  // Save group icon to persistent storage
-  saveGroupIcon(groupId, iconUrl) {
-    try {
-      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
-      icons[groupId] = iconUrl;
-      SessionStore.setCustomWindowValue(window, "tabGroupIcons", icons);
-    } catch (error) {
-      console.error("[AdvancedTabGroups] Error saving group icon:", error);
+  get savedIcons() {
+    const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+    if (icons !== "") {
+      return JSON.parse(icons);
     }
+    return {};
   }
 
-  // Load saved group icons from persistent storage
-  loadGroupIcons() {
-    try {
-      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+  set savedIcons(value) {
+    SessionStore.setCustomWindowValue(window, "tabGroupIcons", JSON.stringify(value));
+  }
 
-      // Apply icons to existing groups
-      if (Object.keys(icons).length > 0) {
-        setTimeout(() => {
-          this.applySavedIcons(icons);
-        }, 500); // Small delay to ensure groups are fully loaded
-      }
-    } catch (error) {
-      console.error("[AdvancedTabGroups] Error loading saved icons:", error);
-    }
+  // Save group icon to persistent storage
+  saveGroupIcon(groupId, iconUrl) {
+    const icons = this.savedIcons;
+    icons[groupId] = iconUrl;
+    this.savedIcons = icons;
   }
 
   // Apply saved icons to tab groups
   applySavedIcons(icons) {
     try {
-      Object.entries(icons).forEach(([groupId, iconUrl]) => {
-        // Try to find the group using gBrowser.tabGroups first
-        let group = this.getGroupById(groupId);
-        
-        if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-          const iconContainer = group.querySelector(
-            ".tab-group-icon-container"
-          );
-          if (iconContainer) {
-            let iconElement = iconContainer.querySelector(".tab-group-icon");
-            if (!iconElement) {
-              iconElement = document.createElement("div");
-              iconElement.className = "tab-group-icon";
-              iconContainer.appendChild(iconElement);
-            }
+      setTimeout(() => {
+        Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
+          // Try to find the group using gBrowser.tabGroups first
+          let group = this.getGroupById(groupId);
 
-            // Clear any existing content and add the icon
-            iconElement.innerHTML = "";
-            const imgFrag = window.MozXULElement.parseXULToFragment(`
-              <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
-            `);
-            iconElement.appendChild(imgFrag.firstElementChild);
+          if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
+            const iconContainer = group.querySelector(
+              ".tab-group-icon-container"
+            );
+            if (iconContainer) {
+              let iconElement = iconContainer.querySelector(".tab-group-icon");
+              if (!iconElement) {
+                iconElement = document.createElement("div");
+                iconElement.className = "tab-group-icon";
+                iconContainer.appendChild(iconElement);
+              }
+
+              // Clear any existing content and add the icon
+              iconElement.innerHTML = "";
+              const imgFrag = window.MozXULElement.parseXULToFragment(`
+                <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
+              `);
+              iconElement.appendChild(imgFrag.firstElementChild);
+            }
           }
-        }
-      });
+        });
+      }, 500);
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved icons:", error);
     }
@@ -1319,9 +1323,9 @@ class AdvancedTabGroups {
   // Remove saved icon for a specific tab group
   removeSavedIcon(groupId) {
     try {
-      const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+      const icons = this.savedIcons;
       delete icons[groupId];
-      SessionStore.setCustomWindowValue(window, "tabGroupIcons", icons);
+      this.savedIcons = icons;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved icon:", error);
     }

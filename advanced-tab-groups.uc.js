@@ -457,7 +457,7 @@ class AdvancedTabGroups {
         [setGroupColorItem, "_setGroupColor"],
         [useFaviconColorItem, "_useFaviconColor"],
         [renameGroupItem, this.renameGroupStart],
-        [changeGroupIconItem, this.changeGroupIcon],
+        [changeGroupIconItem, this.applyGroupIcon],
         [ungroupTabsItem, "ungroupTabs"],
         [convertToFolderItem, this.convertGroupToFolder]
       ];
@@ -1109,47 +1109,6 @@ class AdvancedTabGroups {
     }
   }
 
-  // Change group icon using the Zen emoji picker (SVG icons only)
-  async changeGroupIcon(group) {
-    try {
-      // Find the icon element (create if it doesn't exist)
-      const iconContainer = group.querySelector(".tab-group-icon-container");
-      let iconElement = iconContainer.querySelector(".tab-group-icon");
-      if (!iconElement) {
-        iconElement = document.createElement("div");
-        iconElement.className = "tab-group-icon";
-        iconContainer.appendChild(iconElement);
-      }
-
-      // Open the emoji picker with SVG icons only
-      const selectedIcon = await window.gZenEmojiPicker.open(iconElement, {
-        onlySvgIcons: true,
-      });
-
-      if (selectedIcon) {
-        // Clear any existing icon content
-        iconElement.innerHTML = "";
-
-        // Create an image element for the SVG icon using parsed XUL
-        const imgFrag = window.MozXULElement.parseXULToFragment(`
-          <image src="${selectedIcon}" class="group-icon" alt="Group Icon"/>
-        `);
-        iconElement.appendChild(imgFrag.firstElementChild);
-
-        // Save the icon to persistent storage
-        this.saveGroupIcon(group.id, selectedIcon);
-      } else if (selectedIcon === null) {
-        // Clear the icon content
-        iconElement.innerHTML = "";
-
-        // Remove the icon from persistent storage
-        this.removeSavedIcon(group.id);
-      }
-    } catch (error) {
-      console.error("[AdvancedTabGroups] Error changing group icon:", error);
-    }
-  }
-
   // Helper method to calculate average color
   _calculateAverageColor(colors) {
     if (colors.length === 0) return [0, 0, 0];
@@ -1285,33 +1244,51 @@ class AdvancedTabGroups {
     this.savedIcons = icons;
   }
 
+  async applyGroupIcon(group, iconUrl = null) {
+    const iconContainer = group.querySelector(".tab-group-icon-container");
+    let iconElement = iconContainer.querySelector(".tab-group-icon");
+    if (!iconElement) {
+      iconElement = document.createElement("div");
+      iconElement.className = "tab-group-icon";
+      iconContainer.appendChild(iconElement);
+    }
+
+    // Open the emoji picker with SVG icons only
+    if (!iconUrl) {
+      iconUrl = await window.gZenEmojiPicker.open(iconElement);
+    }
+  
+    iconElement.innerHTML = "";
+    if (iconUrl) {
+      // Create an image element for the SVG icon using parsed XUL
+      let imgFrag;
+      if (iconUrl.endsWith(".svg")) {
+        imgFrag = window.MozXULElement.parseXULToFragment(`
+          <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
+        `);
+      } else {
+        imgFrag = window.MozXULElement.parseXULToFragment(`
+          <label>${iconUrl}</label>
+        `);
+      }
+      iconElement.appendChild(imgFrag.firstElementChild);
+    
+      // Save the icon to persistent storage
+      this.saveGroupIcon(group.id, iconUrl);
+    } else {
+      // Remove the icon from persistent storage
+      this.removeSavedIcon(group.id);
+    }
+  }
+
   // Apply saved icons to tab groups
-  applySavedIcons(icons) {
+  applySavedIcons() {
     try {
       setTimeout(() => {
         Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
-          // Try to find the group using gBrowser.tabGroups first
-          let group = this.getGroupById(groupId);
-
+          const group = this.getGroupById(groupId);
           if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-            const iconContainer = group.querySelector(
-              ".tab-group-icon-container"
-            );
-            if (iconContainer) {
-              let iconElement = iconContainer.querySelector(".tab-group-icon");
-              if (!iconElement) {
-                iconElement = document.createElement("div");
-                iconElement.className = "tab-group-icon";
-                iconContainer.appendChild(iconElement);
-              }
-
-              // Clear any existing content and add the icon
-              iconElement.innerHTML = "";
-              const imgFrag = window.MozXULElement.parseXULToFragment(`
-                <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
-              `);
-              iconElement.appendChild(imgFrag.firstElementChild);
-            }
+            this.applyGroupIcon(group, iconUrl);
           }
         });
       }, 500);

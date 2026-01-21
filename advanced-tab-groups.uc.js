@@ -49,8 +49,11 @@ class AdvancedTabGroups {
     // Set up workspace change observer to update group visibility
     this.setupWorkspaceObserver();
 
-    // Initial update of group visibility
-    setTimeout(() => this.updateGroupVisibility(), 500);
+    // Initial update of group visibility and separator
+    setTimeout(() => {
+      this.updateGroupVisibility();
+      this.updatePinnedSeparatorVisibility();
+    }, 500);
   }
 
   setupObserver() {
@@ -85,6 +88,15 @@ class AdvancedTabGroups {
             }
           });
         }
+        // Check for removed nodes to update separator visibility
+        if (mutation.type === "childList" && mutation.removedNodes.length > 0) {
+          mutation.removedNodes.forEach((node) => {
+            if (node.nodeType === Node.ELEMENT_NODE && node.tagName === "tab-group") {
+              // A tab group was removed, update separator visibility
+              setTimeout(() => this.updatePinnedSeparatorVisibility(), 0);
+            }
+          });
+        }
       });
     });
 
@@ -105,15 +117,21 @@ class AdvancedTabGroups {
       if (originalSwitchToWorkspace) {
         window.gZenWorkspaces.switchToWorkspace = (...args) => {
           const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
-          // Update group visibility after workspace switch
-          setTimeout(() => this.updateGroupVisibility(), 100);
+          // Update group visibility and separator after workspace switch
+          setTimeout(() => {
+            this.updateGroupVisibility();
+            this.updatePinnedSeparatorVisibility();
+          }, 100);
           return result;
         };
       }
 
       // Also listen for workspace strip changes
       const workspaceObserver = new MutationObserver(() => {
-        setTimeout(() => this.updateGroupVisibility(), 100);
+        setTimeout(() => {
+          this.updateGroupVisibility();
+          this.updatePinnedSeparatorVisibility();
+        }, 100);
       });
 
       // Observe changes to the workspace container
@@ -179,6 +197,39 @@ class AdvancedTabGroups {
       }
     } catch (error) {
       console.error("[AdvancedTabGroups] Error updating group visibility:", error);
+    }
+  }
+
+  // Update pinned tabs separator visibility based on whether there are non-pinned tabs
+  updatePinnedSeparatorVisibility() {
+    try {
+      if (!window.gZenWorkspaces || !gZenWorkspaces.activeWorkspaceStrip) {
+        return;
+      }
+
+      const workspaceStrip = gZenWorkspaces.activeWorkspaceStrip;
+      const pinnedTabsSection = workspaceStrip.querySelector(".zen-workspace-pinned-tabs-section");
+      const normalTabsSection = workspaceStrip.querySelector(".zen-workspace-normal-tabs-section");
+
+      if (!pinnedTabsSection || !normalTabsSection) {
+        return;
+      }
+
+      // Check if there are any non-pinned tabs or groups in the normal tabs section
+      const hasNonPinnedContent = normalTabsSection.querySelectorAll(
+        ".tabbrowser-tab:not([pinned]), tab-group:not([hidden])"
+      ).length > 0;
+
+      // Update the hide-separator attribute based on whether there's content
+      if (hasNonPinnedContent) {
+        pinnedTabsSection.removeAttribute("hide-separator");
+      } else {
+        pinnedTabsSection.setAttribute("hide-separator", "true");
+      }
+
+      console.log(`[AdvancedTabGroups] Updated separator visibility: ${hasNonPinnedContent ? "visible" : "hidden"}`);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error updating separator visibility:", error);
     }
   }
 
@@ -375,6 +426,8 @@ class AdvancedTabGroups {
 
         gBrowser.removeTabGroup(group);
         
+        // Update separator visibility after removing the group
+        setTimeout(() => this.updatePinnedSeparatorVisibility(), 0);
       } catch (error) {
         console.error("[AdvancedTabGroups] Error removing tab group:", error);
       }
@@ -683,6 +736,8 @@ class AdvancedTabGroups {
 
         gBrowser.removeTabGroup(group);
         
+        // Update separator visibility after removing the group
+        setTimeout(() => this.updatePinnedSeparatorVisibility(), 0);
       } catch (error) {
         console.error(
           "[AdvancedTabGroups] Error closing group via context menu:",

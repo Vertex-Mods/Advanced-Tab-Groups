@@ -335,10 +335,17 @@ class AdvancedTabGroups {
       return;
     }
 
+    const tabContainer = group.querySelector(".tab-group-container");
+    const grain = document.createElement("div");
+    grain.className = "grain";
+    tabContainer.appendChild(grain);
+
     // Create and inject the icon container and close button
     const groupDomFrag = window.MozXULElement.parseXULToFragment(`
       <div class="tab-group-icon-container">
-        <div class="tab-group-icon"></div>
+        <div class="tab-group-icon">
+          <div class="grain"></div>
+        </div>
         <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
       </div>
       <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
@@ -772,11 +779,16 @@ class AdvancedTabGroups {
                 `--tab-group-color-${group.id}-invert`,
                 gradient
               );
+
+              group.style.setProperty("--group-grain", gZenThemePicker.currentTexture);
+              group.setAttribute("show-grain", gZenThemePicker.currentTexture > 0);
             
               return colors;
             }
 
             const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
+
+            const theme = this.savedColors[group.id];
 
             // Override the updateCurrentWorkspace method to prevent browser background changes
             window.gZenThemePicker.updateCurrentWorkspace = () => {
@@ -788,6 +800,52 @@ class AdvancedTabGroups {
                 } else {
                   clickToAdd.removeAttribute("hidden");
                 }
+                
+                const originalUpdateNoise = gZenThemePicker.updateNoise;
+                gZenThemePicker.updateNoise = () => {};
+                const fakeWindow = {
+                  document: {
+                    documentElement: {
+                      style: {
+                        setProperty: () => {},
+                      },
+                      setAttribute: () => {},
+                      removeAttribute: () => {},
+                    },
+                    getElementById: document.getElementById.bind(document),
+                    querySelectorAll: document.querySelectorAll.bind(document),
+                  },
+                  gZenThemePicker,
+                  gZenWorkspaces: {
+                    getActiveWorkspace: () => {
+                      return { uuid: group.id };
+                    },
+                    workspaceElement: () => {
+                      return null;
+                    },
+                  },
+                }
+
+                const originalWm = Services.wm;
+                Services.wm = {
+                  getEnumerator: () => {
+                    return [fakeWindow];
+                  }
+                }
+
+                gZenThemePicker.onWorkspaceChange(
+                  { uuid: group.id },
+                  true,
+                  {
+                    type: undefined,
+                    gradientColors: colors,
+                    opacity: gZenThemePicker.currentOpacity,
+                    texture: gZenThemePicker.currentTexture
+                  }
+                );
+
+                Services.wm = originalWm;
+                gZenThemePicker.updateNoise = originalUpdateNoise;
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error applying color to group:",
@@ -801,10 +859,14 @@ class AdvancedTabGroups {
 
             resetPickerDots();
 
-            const colors = this.savedColors[group.id];
-            if (colors && typeof colors === "object" && colors.length) {
+            const previousOpacity = gZenThemePicker.currentOpacity;
+            const previousTexture = gZenThemePicker.currentTexture;
+
+            if (theme && typeof theme === "object" && theme.gradientColors?.length) {
               clickToAdd.setAttribute("hidden", "true");
-              gZenThemePicker.recalculateDots(colors ?? []);
+              gZenThemePicker.recalculateDots(theme.gradientColors ?? []);
+              gZenThemePicker.currentOpacity = theme.opacity;
+              gZenThemePicker.currentTexture = theme.texture;
             }
 
             // Set up a listener for when the panel closes to apply the final color and cleanup
@@ -813,12 +875,17 @@ class AdvancedTabGroups {
               try {
                 // Get the final color from the dots using the same logic
                 const colors = this.savedColors;
-                colors[group.id] = calculateColor();
+                colors[group.id] = {
+                  gradientColors: calculateColor(),
+                  opacity: gZenThemePicker.currentOpacity,
+                  texture: gZenThemePicker.currentTexture
+                };
                 this.savedColors = colors;
 
                 // CRITICAL: Clean up all references and restore original methods
-                window.gZenThemePicker.updateCurrentWorkspace =
-                  originalUpdateMethod;
+                gZenThemePicker.updateCurrentWorkspace = originalUpdateMethod;
+                gZenThemePicker.currentOpacity = previousOpacity;
+                gZenThemePicker.currentTexture = previousTexture;
 
                 resetPickerDots();
                 gZenThemePicker.recalculateDots(
@@ -1091,7 +1158,6 @@ class AdvancedTabGroups {
   }
 
   convertFolderToGroup(folder) {
-    
     try {
       const tabsToGroup = folder.allItemsRecursive.filter(
         (item) => gBrowser.isTab(item) && !item.hasAttribute("zen-empty-tab")
@@ -1251,10 +1317,14 @@ class AdvancedTabGroups {
   // Apply saved colors to tab groups
   applySavedColors() {
     try {
-      Object.entries(this.savedColors).forEach(([groupId, color]) => {
-        const gradient = gZenThemePicker.getGradient(color);
+      Object.entries(this.savedColors).forEach(async ([groupId, color]) => {
+        const gradient = gZenThemePicker.getGradient(color.gradientColors);
         document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
         document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
+
+        const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+        group.style.setProperty("--group-grain", color.texture);
+        group.setAttribute("show-grain", color.texture > 0);
       });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved colors:", error);
@@ -1307,7 +1377,10 @@ class AdvancedTabGroups {
       });
     }
   
-    iconElement.innerHTML = "";
+    const image = iconElement.querySelector("image");
+    if (image) {
+      image.remove();
+    }
     if (iconUrl) {
       // Create an image element for the SVG icon using parsed XUL
       let imgFrag;

@@ -49,19 +49,44 @@ class AdvancedTabGroups {
     // Set up workspace change observer to update group visibility
     this.setupWorkspaceObserver();
 
-    // Listen for tab group removed events to update separator visibility
-    // Try both document and window level, as the event might bubble to either
-    window.addEventListener("TabGroupRemoved", this.onTabGroupRemoved.bind(this), true);
+    // Set up observer for tabs section to update separator visibility
+    this.setupSeparatorObserver();
 
     // Initial update of group visibility
     setTimeout(() => this.updateGroupVisibility(), 500);
   }
 
-  // Handle tab group removal to update separator visibility
-  onTabGroupRemoved(event) {
-    console.log("[AdvancedTabGroups] TabGroupRemoved event received");
-    // Use a small delay to ensure DOM has been updated
-    setTimeout(() => this.updatePinnedSeparatorVisibility(), 100);
+  // Set up observer for the normal tabs section to update separator visibility
+  setupSeparatorObserver() {
+    // Wait for the workspace to be ready
+    setTimeout(() => {
+      if (!window.gZenWorkspaces || !gZenWorkspaces.activeWorkspaceStrip) {
+        // Try again if not ready
+        setTimeout(() => this.setupSeparatorObserver(), 500);
+        return;
+      }
+
+      const workspaceStrip = gZenWorkspaces.activeWorkspaceStrip;
+      const normalTabsSection = workspaceStrip.tabsContainer;
+
+      if (!normalTabsSection) {
+        return;
+      }
+
+      // Create observer to watch for changes in the normal tabs section
+      const separatorObserver = new MutationObserver(() => {
+        // Update separator visibility when tabs/groups are added or removed
+        this.updatePinnedSeparatorVisibility();
+      });
+
+      // Observe changes to the normal tabs section
+      separatorObserver.observe(normalTabsSection, {
+        childList: true,
+        subtree: false // Only watch direct children
+      });
+
+      console.log("[AdvancedTabGroups] Separator observer set up");
+    }, 500);
   }
 
   setupObserver() {
@@ -197,6 +222,7 @@ class AdvancedTabGroups {
   updatePinnedSeparatorVisibility() {
     try {
       if (!window.gZenWorkspaces || !gZenWorkspaces.activeWorkspaceStrip) {
+        console.log("[AdvancedTabGroups] Workspace not ready");
         return;
       }
 
@@ -205,23 +231,39 @@ class AdvancedTabGroups {
       const normalTabsSection = workspaceStrip.tabsContainer;
 
       if (!pinnedTabsSection || !normalTabsSection) {
+        console.log("[AdvancedTabGroups] Tabs sections not found");
         return;
       }
 
       // Count actual visible tabs and groups in the normal tabs section
       // Exclude: periphery element, hidden elements, and empty tabs
       let hasContent = false;
+      let contentCount = 0;
+      
       for (const child of normalTabsSection.children) {
+        const tagName = child.tagName?.toLowerCase();
+        const childInfo = `${tagName} id=${child.id} hidden=${child.hidden || child.hasAttribute("hidden")}`;
+        
         // Skip the periphery element
-        if (child.id === "tabbrowser-arrowscrollbox-periphery") continue;
+        if (child.id === "tabbrowser-arrowscrollbox-periphery") {
+          console.log(`[AdvancedTabGroups] Skipping periphery: ${childInfo}`);
+          continue;
+        }
         // Skip hidden elements
-        if (child.hidden || child.hasAttribute("hidden")) continue;
+        if (child.hidden || child.hasAttribute("hidden")) {
+          console.log(`[AdvancedTabGroups] Skipping hidden: ${childInfo}`);
+          continue;
+        }
         // Skip empty tabs
-        if (child.hasAttribute("zen-empty-tab")) continue;
+        if (child.hasAttribute("zen-empty-tab")) {
+          console.log(`[AdvancedTabGroups] Skipping empty tab: ${childInfo}`);
+          continue;
+        }
         // If we find any visible tab or group, we have content
-        if (child.tagName === "tab" || child.tagName === "tab-group") {
+        if (tagName === "tab" || tagName === "tab-group") {
+          console.log(`[AdvancedTabGroups] Found content: ${childInfo}`);
           hasContent = true;
-          break;
+          contentCount++;
         }
       }
 
@@ -232,7 +274,7 @@ class AdvancedTabGroups {
         pinnedTabsSection.setAttribute("hide-separator", "true");
       }
 
-      console.log(`[AdvancedTabGroups] Updated separator visibility: ${hasContent ? "visible" : "hidden"}`);
+      console.log(`[AdvancedTabGroups] Separator visibility: ${hasContent ? "visible" : "hidden"} (${contentCount} items)`);
     } catch (error) {
       console.error("[AdvancedTabGroups] Error updating separator visibility:", error);
     }
@@ -416,7 +458,8 @@ class AdvancedTabGroups {
     // Add the close button to the label container
     labelContainer.appendChild(closeButton);
 
-    
+    // Mark as processed to prevent duplicate processing
+    group.setAttribute("data-close-button-added", "true");
 
     // Add click event listener
     closeButton.addEventListener("click", (event) => {
@@ -431,8 +474,6 @@ class AdvancedTabGroups {
 
         gBrowser.removeTabGroup(group);
         
-        // Update separator visibility after removing the group (fallback in case event doesn't fire)
-        setTimeout(() => this.updatePinnedSeparatorVisibility(), 150);
       } catch (error) {
         console.error("[AdvancedTabGroups] Error removing tab group:", error);
       }
@@ -741,8 +782,6 @@ class AdvancedTabGroups {
 
         gBrowser.removeTabGroup(group);
         
-        // Update separator visibility after removing the group (fallback in case event doesn't fire)
-        setTimeout(() => this.updatePinnedSeparatorVisibility(), 150);
       } catch (error) {
         console.error(
           "[AdvancedTabGroups] Error closing group via context menu:",

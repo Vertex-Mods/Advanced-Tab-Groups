@@ -6,17 +6,19 @@ tab-group:not([split-view-group]) {
     color-mix(in srgb, var(--zen-primary-color) 60%, black),
     color-mix(in srgb, var(--zen-colors-primary) 20%, var(--toolbox-textcolor)));
   
-    &[show-grain="true"] .grain {
-      display: flex;
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      background-image: url(chrome://browser/content/zen-images/grain-bg.png);
-      pointer-events: none;
-      z-index: 1;
-      opacity: var(--group-grain, 0);
-      mix-blend-mode: overlay;
-      border-radius: 4px;
+    @media not (-moz-pref("browser.tabs.groups.arc-style")) {
+      &[show-grain="true"] .grain {
+        display: flex;
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-image: url(chrome://browser/content/zen-images/grain-bg.png);
+        pointer-events: none;
+        z-index: 1;
+        opacity: var(--group-grain, 0);
+        mix-blend-mode: overlay;
+        border-radius: 4px;
+      }
     }
 
   .tab-group-label-container {

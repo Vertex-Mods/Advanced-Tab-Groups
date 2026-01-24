@@ -1386,10 +1386,9 @@ class AdvancedTabGroups {
       });
     }
   
-    const image = iconElement.querySelector("image");
-    if (image) {
-      image.remove();
-    }
+    iconElement.querySelector("image")?.remove();
+    iconElement.querySelector("label")?.remove();
+    
     if (iconUrl) {
       // Create an image element for the SVG icon using parsed XUL
       let imgFrag;

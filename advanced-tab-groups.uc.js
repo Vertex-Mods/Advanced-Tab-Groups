@@ -571,7 +571,7 @@ class AdvancedTabGroups {
     const groupIcon = group.querySelector(".group-icon");
     // If the background is dark mode, we need to get the contrast of that (opposite).
     const shouldBeDarkMode = !gZenThemePicker.shouldBeDarkMode(
-      gZenThemePicker.getMostDominantColor(colors)
+      typeof colors[0] === "object" ? gZenThemePicker.getMostDominantColor(colors) : colors
     );
     if (groupIcon) {
       if (shouldBeDarkMode) {
@@ -988,7 +988,7 @@ class AdvancedTabGroups {
                 if (processedCount === totalFavicons) {
                   if (colors.length > 0) {
                     const finalColor = self._calculateAverageColor(colors);
-                    const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
+                    const colorString = `rgb(${finalColor.join(", ")})`;
 
                     // Set the --tab-group-color CSS variable
                     document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
@@ -998,6 +998,7 @@ class AdvancedTabGroups {
                     );
 
                     // Save the color to persistent storage
+                    self.updateIconColor(group, finalColor);
                     self.saveTabGroupColors();
                   }
                 }
@@ -1021,6 +1022,7 @@ class AdvancedTabGroups {
                     colorString
                   );
 
+                  self.updateIconColor(group, finalColor);
                   self.saveTabGroupColors();
                 }
               }
@@ -1043,6 +1045,7 @@ class AdvancedTabGroups {
                   colorString
                 );
 
+                self.updateIconColor(group, finalColor);
                 self.saveTabGroupColors();
               }
             };
@@ -1098,8 +1101,6 @@ class AdvancedTabGroups {
 
   // New method to convert group to folder
   convertGroupToFolder(group) {
-    
-
     try {
       // Check if Zen folders functionality is available
       if (!window.gZenFolders) {
@@ -1388,7 +1389,7 @@ class AdvancedTabGroups {
   
     iconElement.querySelector("image")?.remove();
     iconElement.querySelector("label")?.remove();
-    
+
     if (iconUrl) {
       // Create an image element for the SVG icon using parsed XUL
       let imgFrag;

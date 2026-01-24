@@ -121,10 +121,6 @@ tab-group:not([split-view-group]) {
       pointer-events: none !important;
     }
 
-    .grain {
-      background-image: url(chrome://browser/content/zen-images/grain-bg.png);
-    }
-
     &::after {
       content: "";
       background: var(--tab-group-color);

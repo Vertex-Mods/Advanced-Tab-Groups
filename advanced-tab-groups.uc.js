@@ -702,10 +702,12 @@ class AdvancedTabGroups {
       group.removeAttribute("collapsed");
     };
 
-    group._setGroupColor = () => {
-      if (this.getGroupById(group.id).color) {
-        this.getGroupById(group.id).color = group.id;
+    group._setGroupColor = async () => {
+      let faviconColor; 
+      if (group.color.endsWith("favicon")) {
+        faviconColor = await group._useFaviconColor();
       }
+      group.color = group.id;
 
       // Check if the gradient picker is available
       if (window.gZenThemePicker) {
@@ -788,7 +790,7 @@ class AdvancedTabGroups {
 
             const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
 
-            const theme = this.savedColors[group.id];
+            let theme = this.savedColors[group.id];
 
             // Override the updateCurrentWorkspace method to prevent browser background changes
             window.gZenThemePicker.updateCurrentWorkspace = () => {
@@ -862,6 +864,23 @@ class AdvancedTabGroups {
             const previousOpacity = gZenThemePicker.currentOpacity;
             const previousTexture = gZenThemePicker.currentTexture;
 
+            if (faviconColor) {
+              theme = {
+                gradientColors: [
+                  {
+                    c: faviconColor,
+                    isCustom: false,
+                    isPrimary: true,
+                    lightness: 50,
+                    position: gZenThemePicker.calculateInitialPosition(faviconColor),
+                    type: "undefined"
+                  }
+                ],
+                opacity: 1,
+                texture: 0
+              }
+            }
+
             if (theme && typeof theme === "object" && theme.gradientColors?.length) {
               clickToAdd.setAttribute("hidden", "true");
               gZenThemePicker.recalculateDots(theme.gradientColors ?? []);
@@ -915,23 +934,18 @@ class AdvancedTabGroups {
       }
     };
 
-    group._useFaviconColor = () => {
+    group._useFaviconColor = async () => {
       // Capture 'this' for use in callbacks
       const self = this;
 
       try {
         // Get all favicon images directly from the group
         const favicons = group.querySelectorAll(".tab-icon-image");
-        if (favicons.length === 0) {
-          return;
-        }
 
         // Extract colors from favicons
         const colors = [];
-        let processedCount = 0;
-        const totalFavicons = favicons.length;
 
-        favicons.forEach((favicon, index) => {
+        for (const [index, favicon] of Array.from(favicons).entries()) {
           if (favicon && favicon.src && favicon.src !== "chrome://global/skin/icons/defaultFavicon.svg") {
             // Create a canvas to analyze the favicon
             const canvas = document.createElement("canvas");
@@ -940,6 +954,9 @@ class AdvancedTabGroups {
 
             // Set crossOrigin to handle CORS issues
             img.crossOrigin = "anonymous";
+
+            let processedResolve;
+            const processedPromise = new Promise(r => processedResolve = r);
 
             img.onload = () => {
               try {
@@ -982,26 +999,7 @@ class AdvancedTabGroups {
                   colors.push(avgColor);
                 }
 
-                processedCount++;
-
-                // If this is the last favicon processed, calculate average and apply
-                if (processedCount === totalFavicons) {
-                  if (colors.length > 0) {
-                    const finalColor = self._calculateAverageColor(colors);
-                    const colorString = `rgb(${finalColor.join(", ")})`;
-
-                    // Set the --tab-group-color CSS variable
-                    document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
-                    document.documentElement.style.setProperty(
-                      `--tab-group-color-${group.id}-favicon-invert`,
-                      colorString
-                    );
-
-                    // Save the color to persistent storage
-                    self.updateIconColor(group, finalColor);
-                    self.saveTabGroupColors();
-                  }
-                }
+                processedResolve(true);
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error processing favicon",
@@ -1009,87 +1007,45 @@ class AdvancedTabGroups {
                   ":",
                   error
                 );
-                processedCount++;
-
-                // Still check if we're done processing
-                if (processedCount === totalFavicons && colors.length > 0) {
-                  const finalColor = self._calculateAverageColor(colors);
-                  const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                  document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
-                  document.documentElement.style.setProperty(
-                    `--tab-group-color-${group.id}-favicon-invert`,
-                    colorString
-                  );
-
-                  self.updateIconColor(group, finalColor);
-                  self.saveTabGroupColors();
-                }
               }
-              
-              this.getGroupById(group.id).color = `${group.id}-favicon`;
             };
 
             img.onerror = () => {
               console.warn("[AdvancedTabGroups] Failed to load favicon:", favicon.src);
-              processedCount++;
-
-              // Check if we're done processing
-              if (processedCount === totalFavicons && colors.length > 0) {
-                const finalColor = self._calculateAverageColor(colors);
-                const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                document.documentElement.style.setProperty(
-                  `--tab-group-color-${group.id}-invert`,
-                  colorString
-                );
-
-                self.updateIconColor(group, finalColor);
-                self.saveTabGroupColors();
-              }
+              processedResolve(true);
             };
 
             // Add timeout to prevent hanging
             setTimeout(() => {
               if (img.complete === false) {
                 console.warn("[AdvancedTabGroups] Favicon load timeout:", favicon.src);
-                processedCount++;
-                
-                if (processedCount === totalFavicons && colors.length > 0) {
-                  const finalColor = self._calculateAverageColor(colors);
-                  const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                  document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-                  document.documentElement.style.setProperty(
-                    `--tab-group-color-${group.id}-invert`,
-                    colorString
-                  );
-
-                  self.saveTabGroupColors();
-                }
+                processedResolve(true);
               }
             }, 3000);
 
             img.src = favicon.src;
-          } else {
-            processedCount++;
 
-            // Check if we're done processing
-            if (processedCount === totalFavicons && colors.length > 0) {
-              const finalColor = self._calculateAverageColor(colors);
-              const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-              document.documentElement.style.setProperty(`--tab-group-color-${group.id}`, colorString);
-              document.documentElement.style.setProperty(
-                `--tab-group-color-${group.id}-invert`,
-                colorString
-              );
-
-              self.saveTabGroupColors();
-            }
+            await processedPromise;
           }
-        });
+        };
+
+        if (colors.length > 0) {
+          this.getGroupById(group.id).color = `${group.id}-favicon`;
+
+          const finalColor = self._calculateAverageColor(colors);
+          const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
+        
+          document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
+          document.documentElement.style.setProperty(
+            `--tab-group-color-${group.id}-favicon-invert`,
+            colorString
+          );
+        
+          this.updateIconColor(group, finalColor);
+          this.saveTabGroupColors();
+
+          return finalColor;
+        }
       } catch (error) {
         console.error(
           "[AdvancedTabGroups] Error extracting favicon colors:",

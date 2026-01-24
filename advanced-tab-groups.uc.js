@@ -1371,7 +1371,7 @@ class AdvancedTabGroups {
   }
 
   async applyGroupIcon(group, iconUrl = null) {
-    const iconContainer = await this.waitForElm(".tab-group-icon-container");
+    const iconContainer = await this.waitForElm(`tab-group[id="${group.id}"] .tab-group-icon-container`);
     let iconElement = iconContainer.querySelector(".tab-group-icon");
     if (!iconElement) {
       iconElement = document.createElement("div");

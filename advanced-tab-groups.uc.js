@@ -115,7 +115,7 @@ class AdvancedTabGroups {
   waitForDependencies() {
     return new Promise((resolve) => {
       const id = setInterval(() => {
-        const deps = ["SessionStore", "gZenWorkspaces"]
+        const deps = ["SessionStore", "gZenWorkspaces", "gZenThemePicker"]
         
         let depsExist = true;
         for (const dep of deps) {
@@ -1318,13 +1318,22 @@ class AdvancedTabGroups {
   applySavedColors() {
     try {
       Object.entries(this.savedColors).forEach(async ([groupId, color]) => {
-        const gradient = gZenThemePicker.getGradient(color.gradientColors);
-        document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
-        document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
+        if (color.gradientColors) {
+          const previousOpacity = gZenThemePicker.currentOpacity;
+          gZenThemePicker.currentOpacity = color.opacity;
 
-        const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
-        group.style.setProperty("--group-grain", color.texture);
-        group.setAttribute("show-grain", color.texture > 0);
+          const gradient = gZenThemePicker.getGradient(color.gradientColors);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
+
+          gZenThemePicker.currentOpacity = previousOpacity;
+        }
+
+        if (color.texture) {
+          const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+          group.style.setProperty("--group-grain", color.texture);
+          group.setAttribute("show-grain", color.texture > 0);
+        }
       });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved colors:", error);
@@ -1395,7 +1404,7 @@ class AdvancedTabGroups {
       }
       iconElement.appendChild(imgFrag.firstElementChild);
 
-      this.updateIconColor(group, this.savedColors[group.id])
+      this.updateIconColor(group, this.savedColors[group.id].gradientColors)
     
       // Save the icon to persistent storage
       this.saveGroupIcon(group.id, iconUrl);

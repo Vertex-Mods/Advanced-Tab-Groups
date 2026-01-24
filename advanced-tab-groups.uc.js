@@ -453,20 +453,20 @@ class AdvancedTabGroups {
     try {
       const contextMenuFrag = window.MozXULElement.parseXULToFragment(`
         <menupopup id="advanced-tab-groups-context-menu">
-          <menu class="change-group-color" label="Change Group Color">
+          <menu class="change-group-color" label="Change Color">
             <menupopup>
               <menuitem class="set-group-color" 
-                        label="Set Group Color"/>
+                        label="Edit Color"/>
               <menuitem class="use-favicon-color" 
-                        label="Use Average Favicon Color"/>
+                        label="Use Tab Icon Colors"/>
             </menupopup>
           </menu>
           <menuitem class="rename-group" label="Rename"/>
           <menuitem class="change-group-icon" label="Change Icon"/>
           <menuseparator/>
-          <menuitem class="ungroup-tabs" label="Ungroup Tabs"/>
+          <menuitem class="ungroup-tabs" label="Ungroup"/>
           <menuitem class="convert-group-to-folder" 
-                    label="Convert Group to Folder"/>
+                    label="Convert to Folder"/>
         </menupopup>
       `);
 

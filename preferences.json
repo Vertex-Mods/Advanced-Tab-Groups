@@ -8,7 +8,7 @@
   },
   {
     "type": "separator",
-    "label": "Other Styles"
+    "label": "Configurations"
   },
   {
     "property": "browser.tabs.groups.arc-style",

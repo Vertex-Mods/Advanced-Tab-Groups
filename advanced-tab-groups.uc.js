@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ====== v3.3.0s ====== */
+/* ====== v3.4.0s ====== */
 
 class AdvancedTabGroups {
   #initTabGroupListener;

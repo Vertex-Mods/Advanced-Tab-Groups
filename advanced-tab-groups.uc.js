@@ -4,21 +4,23 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ====== v3.3.0s ====== */
-
-window.UC_API = ChromeUtils.importESModule("chrome://userchromejs/content/uc_api.sys.mjs");
+/* ====== v3.4.0s ====== */
 
 class AdvancedTabGroups {
+  #initTabGroupListener;
+
   constructor() {
     this.init();
   }
 
-  init() {
-    // Load saved tab group colors
-    this.loadSavedColors();
+  async init() {
+    // Wait for any dependencies before proceeding.
+    await this.waitForDependencies();
 
-    // Load saved tab group icons
-    this.loadGroupIcons();
+    // Load saved tab group settings
+    this.applySavedColors();
+    this.applySavedIcons();
+    this.applySavedCollapsedStates();
 
     // Set up observer for all tab groups
     this.setupObserver();
@@ -35,10 +37,8 @@ class AdvancedTabGroups {
     // Also try again after a delay to catch any missed groups
     setTimeout(() => this.processExistingGroups(), 1000);
 
-    // Set up periodic saving of colors (every 30 seconds)
-    setInterval(() => {
-      this.saveTabGroupColors();
-    }, 30000);
+    // Apply saved collapsed states after groups are processed
+    setTimeout(() => this.applySavedCollapsedStates(), 1500);
 
     // Listen for tab group creation events from the platform component
     document.addEventListener(
@@ -92,40 +92,75 @@ class AdvancedTabGroups {
       childList: true,
       subtree: true,
     });
+  }
 
+  waitForElm(selector) {
+    return new Promise(resolve => {
+      const el = document.querySelector(selector);
+      if (el) {
+        return resolve(el);
+      }
     
+      const observer = new MutationObserver(() => {
+        const el = document.querySelector(selector);
+        if (el) {
+          observer.disconnect();
+          resolve(el);
+        }
+      });
+    
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+    });
+  }
+
+  waitForDependencies() {
+    return new Promise((resolve) => {
+      const id = setInterval(() => {
+        const deps = ["SessionStore", "gZenWorkspaces", "gZenThemePicker"]
+        
+        let depsExist = true;
+        for (const dep of deps) {
+          if (!window.hasOwnProperty(dep)) {
+            depsExist = false;
+          }
+        }
+
+        if (depsExist) {
+          clearInterval(id);
+          resolve();
+        }
+      }, 50);
+    });
   }
 
   // Set up observer for workspace changes to update group visibility
   setupWorkspaceObserver() {
-    // Listen for workspace changes
-    if (window.gZenWorkspaces) {
-      // Override the original workspace switching method to add our visibility update
-      const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
-      if (originalSwitchToWorkspace) {
-        window.gZenWorkspaces.switchToWorkspace = (...args) => {
-          const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
-          // Update group visibility after workspace switch
-          setTimeout(() => this.updateGroupVisibility(), 100);
-          return result;
-        };
-      }
-
-      // Also listen for workspace strip changes
-      const workspaceObserver = new MutationObserver(() => {
-        setTimeout(() => this.updateGroupVisibility(), 100);
+    // Override the original workspace switching method to add our visibility update
+    const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
+    window.gZenWorkspaces.switchToWorkspace = (...args) => {
+      const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
+      // Update group visibility after workspace switch
+      setTimeout(() => this.updateGroupVisibility(), 100);
+      return result;
+    };
+  
+    // Also listen for workspace strip changes
+    const workspaceObserver = new MutationObserver(() => {
+      setTimeout(() => this.updateGroupVisibility(), 100);
+    });
+  
+    // Observe changes to the workspace container
+    const workspaceContainer = document.querySelector("#zen-workspaces-button");
+    if (workspaceContainer) {
+      workspaceObserver.observe(workspaceContainer, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['selected', 'active']
       });
-
-      // Observe changes to the workspace container
-      const workspaceContainer = document.querySelector("#zen-workspaces-button");
-      if (workspaceContainer) {
-        workspaceObserver.observe(workspaceContainer, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['selected', 'active']
-        });
-      }
     }
   }
 
@@ -136,47 +171,21 @@ class AdvancedTabGroups {
       const activeWorkspaceGroups = gZenWorkspaces?.activeWorkspaceStrip?.querySelectorAll("tab-group") || [];
       const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
 
-      // Use gBrowser.tabGroups to iterate through all groups (more efficient)
-      if (gBrowser.tabGroups) {
-        gBrowser.tabGroups.forEach(group => {
-          // Skip split-view-groups
-          if (group.hasAttribute && group.hasAttribute("split-view-group")) {
-            return;
-          }
-
-          // Add or remove hidden attribute based on workspace membership
-          if (activeGroupIds.has(group.id)) {
-            // Group is in active workspace - remove hidden attribute
-            group.removeAttribute("hidden");
-          } else {
-            // Group is not in active workspace - add hidden attribute
-            group.setAttribute("hidden", "true");
-          }
-        });
-
-        console.log(`[AdvancedTabGroups] Updated visibility for ${gBrowser.tabGroups.length} groups, ${activeGroupIds.size} active`);
-      } else {
-        // Fallback to DOM query if gBrowser.tabGroups is not available
-        const allGroups = document.querySelectorAll("tab-group");
-        
-        allGroups.forEach(group => {
-          // Skip split-view-groups
-          if (group.hasAttribute("split-view-group")) {
-            return;
-          }
-
-          // Add or remove hidden attribute based on workspace membership
-          if (activeGroupIds.has(group.id)) {
-            // Group is in active workspace - remove hidden attribute
-            group.removeAttribute("hidden");
-          } else {
-            // Group is not in active workspace - add hidden attribute
-            group.setAttribute("hidden", "true");
-          }
-        });
-
-        console.log(`[AdvancedTabGroups] Updated visibility for ${allGroups.length} groups (fallback), ${activeGroupIds.size} active`);
-      }
+      this.tabGroups.forEach(group => {
+        // Skip split-view-groups
+        if (group.hasAttribute && group.hasAttribute("split-view-group")) {
+          return;
+        }
+      
+        // Add or remove hidden attribute based on workspace membership
+        if (activeGroupIds.has(group.id)) {
+          // Group is in active workspace - remove hidden attribute
+          group.removeAttribute("hidden");
+        } else {
+          // Group is not in active workspace - add hidden attribute
+          group.setAttribute("hidden", "true");
+        }
+      });
     } catch (error) {
       console.error("[AdvancedTabGroups] Error updating group visibility:", error);
     }
@@ -189,7 +198,6 @@ class AdvancedTabGroups {
         ? root.querySelectorAll("#tab-group-editor, tabgroup-meu")
         : [];
       list.forEach((el) => {
-        
         el.remove();
       });
       // Fallback direct id lookup
@@ -197,7 +205,6 @@ class AdvancedTabGroups {
         ? root.getElementById("tab-group-editor")
         : null;
       if (byId) {
-        
         byId.remove();
       }
     } catch (e) {
@@ -208,29 +215,21 @@ class AdvancedTabGroups {
     }
   }
 
-  processExistingGroups() {
-    // Use gBrowser.tabGroups if available (more efficient)
-    if (gBrowser.tabGroups) {
-      console.log(`[AdvancedTabGroups] Processing ${gBrowser.tabGroups.length} existing groups via gBrowser.tabGroups`);
-      
-      gBrowser.tabGroups.forEach((group) => {
-        // Skip split-view-groups
-        if (!group.hasAttribute || !group.hasAttribute("split-view-group")) {
-          this.processGroup(group);
-        }
-      });
-    } else {
-      // Fallback to DOM query
-      const groups = document.querySelectorAll("tab-group");
-      console.log(`[AdvancedTabGroups] Processing ${groups.length} existing groups via DOM query (fallback)`);
+  get tabGroups() {
+    return gBrowser.tabGroups.filter(group => group.tagName === "tab-group");
+  }
 
-      groups.forEach((group) => {
-        // Skip split-view-groups
-        if (!group.hasAttribute("split-view-group")) {
-          this.processGroup(group);
-        }
-      });
-    }
+  getGroupById(groupId) {
+    return this.tabGroups.find(group => group.id === groupId);
+  }
+
+  processExistingGroups() {
+    this.tabGroups.forEach((group) => {
+      // Skip split-view-groups
+      if (!group.hasAttribute || !group.hasAttribute("split-view-group")) {
+        this.processGroup(group);
+      }
+    });
   }
 
   // Track currently edited group for rename
@@ -330,24 +329,27 @@ class AdvancedTabGroups {
       return;
     }
 
-    
-
     const labelContainer = group.querySelector(".tab-group-label-container");
     if (!labelContainer) {
-      
       return;
     }
 
     // Check if close button already exists
     if (labelContainer.querySelector(".tab-close-button")) {
-      
       return;
     }
+
+    const tabContainer = group.querySelector(".tab-group-container");
+    const grain = document.createElement("div");
+    grain.className = "grain";
+    tabContainer.appendChild(grain);
 
     // Create and inject the icon container and close button
     const groupDomFrag = window.MozXULElement.parseXULToFragment(`
       <div class="tab-group-icon-container">
-        <div class="tab-group-icon"></div>
+        <div class="tab-group-icon">
+          <div class="grain"></div>
+        </div>
         <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
       </div>
       <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
@@ -360,21 +362,18 @@ class AdvancedTabGroups {
     // Add the close button to the label container
     labelContainer.appendChild(closeButton);
 
-    
-
     // Add click event listener
     closeButton.addEventListener("click", (event) => {
       event.stopPropagation();
       event.preventDefault();
-      
 
       try {
-        // Remove the group's saved color and icon before removing the group
+        // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
-        
       } catch (error) {
         console.error("[AdvancedTabGroups] Error removing tab group:", error);
       }
@@ -391,13 +390,15 @@ class AdvancedTabGroups {
     ) {
       // Start renaming
       this.renameGroupStart(group, false); // Don't select all for new groups
+      // Ensure the color is set to the id
+      group.color = group.id;
       // Set color to average favicon color
       if (typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
       }
     } else {
       // For existing groups, also apply favicon color if no color is set
-      const currentColor = group.style.getPropertyValue("--tab-group-color");
+      const currentColor = document.documentElement.style.getPropertyValue(`--tab-group-color-${group.id}`);
       if (!currentColor && typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
       }
@@ -406,13 +407,14 @@ class AdvancedTabGroups {
     // Set up observer to automatically update color when tabs change
     this.setupGroupColorObserver(group);
 
+    // Set up observer to track collapsed state changes
+    this.setupGroupCollapsedObserver(group);
+
     // Add context menu to the group
     this.addContextMenu(group);
 
     // Update group visibility based on workspace
     setTimeout(() => this.updateGroupVisibility(), 50);
-
-    
   }
 
   // Set up observer to automatically update group color when tabs change
@@ -440,7 +442,7 @@ class AdvancedTabGroups {
       
       updateTimeout = setTimeout(() => {
         // Update color when tabs are added or removed
-        if (typeof group._useFaviconColor === "function") {
+        if (typeof group._useFaviconColor === "function" && group.color.endsWith("favicon")) {
           group._useFaviconColor();
         }
       }, 500);
@@ -452,6 +454,26 @@ class AdvancedTabGroups {
     });
   }
 
+  // Set up observer to track collapsed state changes
+  setupGroupCollapsedObserver(group) {
+    if (group._collapsedObserverAdded) return;
+    group._collapsedObserverAdded = true;
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
+          // Save the collapsed state when it changes
+          this.saveGroupCollapsedState(group.id, group.hasAttribute("collapsed"));
+        }
+      });
+    });
+
+    observer.observe(group, {
+      attributes: true,
+      attributeFilter: ["collapsed"]
+    });
+  }
+
   // Ensure a single, shared context menu exists and is wired up
   ensureSharedContextMenu() {
     if (this._sharedContextMenu) return this._sharedContextMenu;
@@ -459,12 +481,20 @@ class AdvancedTabGroups {
     try {
       const contextMenuFrag = window.MozXULElement.parseXULToFragment(`
         <menupopup id="advanced-tab-groups-context-menu">
+          <menu class="change-group-color" label="Change Color">
+            <menupopup>
+              <menuitem class="set-group-color" 
+                        label="Edit Color"/>
+              <menuitem class="use-favicon-color" 
+                        label="Use Tab Icon Colors"/>
+            </menupopup>
+          </menu>
           <menuitem class="rename-group" label="Rename"/>
           <menuitem class="change-group-icon" label="Change Icon"/>
           <menuseparator/>
-          <menuitem class="ungroup-tabs" label="Ungroup Tabs"/>
+          <menuitem class="ungroup-tabs" label="Ungroup"/>
           <menuitem class="convert-group-to-folder" 
-                    label="Convert Group to Folder"/>
+                    label="Convert to Folder"/>
         </menupopup>
       `);
 
@@ -474,6 +504,8 @@ class AdvancedTabGroups {
       // Track which group is targeted while the popup is open
       this._contextMenuCurrentGroup = null;
 
+      const setGroupColorItem = contextMenu.querySelector(".set-group-color");
+      const useFaviconColorItem = contextMenu.querySelector(".use-favicon-color");
       const renameGroupItem = contextMenu.querySelector(".rename-group");
       const changeGroupIconItem = contextMenu.querySelector(".change-group-icon");
       const ungroupTabsItem = contextMenu.querySelector(".ungroup-tabs");
@@ -481,48 +513,26 @@ class AdvancedTabGroups {
         ".convert-group-to-folder"
       );
 
-      if (renameGroupItem) {
-        renameGroupItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Rename group command triggered for:", group.id);
-            this.renameGroupStart(group);
-          }
-        });
-      }
+      const menuItems = [
+        [setGroupColorItem, "_setGroupColor"],
+        [useFaviconColorItem, "_useFaviconColor"],
+        [renameGroupItem, this.renameGroupStart],
+        [changeGroupIconItem, this.applyGroupIcon],
+        [ungroupTabsItem, "ungroupTabs"],
+        [convertToFolderItem, this.convertGroupToFolder]
+      ];
 
-      if (changeGroupIconItem) {
-        changeGroupIconItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Change icon command triggered for:", group.id);
-            this.changeGroupIcon(group);
-          }
-        });
-      }
-
-      if (ungroupTabsItem) {
-        ungroupTabsItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group && typeof group.ungroupTabs === "function") {
-            try {
-              console.log("[AdvancedTabGroups] Ungroup tabs command triggered for:", group.id);
-              group.ungroupTabs();
-            } catch (error) {
-              console.error("[AdvancedTabGroups] Error ungrouping tabs:", error);
+      for (const menuItem of menuItems) {
+        if (menuItem[0]) {
+          menuItem[0].addEventListener("command", () => {
+            const group = this._contextMenuCurrentGroup;
+            if (group && typeof menuItem[1] === "function") {
+              menuItem[1].call(this, group);
+            } else if (group) {
+              group[menuItem[1]]();
             }
-          }
-        });
-      }
-
-      if (convertToFolderItem) {
-        convertToFolderItem.addEventListener("command", () => {
-          const group = this._contextMenuCurrentGroup;
-          if (group) {
-            console.log("[AdvancedTabGroups] Convert to folder command triggered for:", group.id);
-            this.convertGroupToFolder(group);
-          }
-        });
+          });
+        }
       }
 
       // Clear the current group when the menu closes (ready to be reused)
@@ -583,6 +593,21 @@ class AdvancedTabGroups {
         }
       });
     }, 1500);
+  }
+
+  updateIconColor(group, colors) {
+    const groupIcon = group.querySelector(".group-icon");
+    // If the background is dark mode, we need to get the contrast of that (opposite).
+    const shouldBeDarkMode = !gZenThemePicker.shouldBeDarkMode(
+      typeof colors[0] === "object" ? gZenThemePicker.getMostDominantColor(colors) : colors
+    );
+    if (groupIcon) {
+      if (shouldBeDarkMode) {
+        groupIcon.style.fill = "black";
+      } else {
+        groupIcon.style.fill = "white";
+      }
+    }
   }
 
   // Handle platform-dispatched creation event for groups
@@ -677,9 +702,10 @@ class AdvancedTabGroups {
 
     group._closeGroupFromContextMenu = () => {
       try {
-        // Remove the group's saved color and icon before removing the group
+        // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
         
@@ -703,31 +729,252 @@ class AdvancedTabGroups {
 
     group._expandGroupFromContextMenu = () => {
       group.removeAttribute("collapsed");
-      
     };
 
+    group._setGroupColor = async () => {
+      let faviconColor; 
+      if (group.color.endsWith("favicon")) {
+        faviconColor = await group._useFaviconColor();
+      }
+      group.color = group.id;
 
-    group._changeGroupIcon = () => {
-      this.changeGroupIcon(group);
+      // Check if the gradient picker is available
+      if (window.gZenThemePicker) {
+        // Try to find and click an existing button that opens the gradient picker
+        try {
+          // Look for the existing button that opens the gradient picker
+          const existingButton = document.getElementById(
+            "zenToolbarThemePicker"
+          );
+          if (existingButton) {
+            // Store original methods for restoration
+            const originalUpdateMethod =
+              window.gZenThemePicker.updateCurrentWorkspace;
+
+            const resetPickerDots = () => {
+                for (const dot of gZenThemePicker.panel.querySelectorAll(".zen-theme-picker-dot")) {
+                  dot.remove();
+                }
+                gZenThemePicker.dots = [];
+            }
+
+            const calculateColor = () => {
+              const dots = gZenThemePicker.panel.querySelectorAll(".zen-theme-picker-dot");
+              const colors = Array.from(dots)
+                .sort((a, b) => a.getAttribute("data-index") - b.getAttribute("data-index"))
+                .map((dot) => {
+                  const color = dot.style.getPropertyValue("--zen-theme-picker-dot-color");
+                  const isPrimary = dot.classList.contains("primary");
+
+                  if (color === "undefined") {
+                    return null;
+                  }
+                  const isCustom = dot.classList.contains("custom");
+                  const algorithm = this.useAlgo;
+                  const position =
+                    dot.getAttribute("data-position") && JSON.parse(dot.getAttribute("data-position"));
+                  const type = dot.getAttribute("data-type");
+                  return {
+                    c: isCustom ? color : color.match(/\d+/g).map(Number),
+                    isCustom,
+                    algorithm,
+                    isPrimary,
+                    lightness: 50,
+                    position,
+                    type,
+                  };
+                })
+                .filter((color) => Boolean(color));
+              
+              let gradient;
+              if (colors.length > 0) {
+                gradient = gZenThemePicker.getGradient(colors);
+                
+                this.updateIconColor(group, colors);
+              } else {
+                gradient = "transparent";
+
+                const groupIcon = group.querySelector(".group-icon");
+                if (groupIcon) {
+                  groupIcon.style.fill = "light-dark(black, white)";
+                }
+              }
+            
+              // Set the --tab-group-color CSS variable on the group
+              document.documentElement.style.setProperty(
+                `--tab-group-color-${group.id}`,
+                gradient
+              );
+            
+              document.documentElement.style.setProperty(
+                `--tab-group-color-${group.id}-invert`,
+                gradient
+              );
+
+              group.style.setProperty("--group-grain", gZenThemePicker.currentTexture);
+              group.setAttribute("show-grain", gZenThemePicker.currentTexture > 0);
+            
+              return colors;
+            }
+
+            const clickToAdd = document.querySelector("#PanelUI-zen-gradient-generator-color-click-to-add");
+
+            let theme = this.savedColors[group.id];
+
+            // Override the updateCurrentWorkspace method to prevent browser background changes
+            window.gZenThemePicker.updateCurrentWorkspace = () => {
+              // Apply the color to our tab group
+              try {
+                const colors = calculateColor();
+                if (colors && colors.length) {
+                  clickToAdd.setAttribute("hidden", "true");
+                } else {
+                  clickToAdd.removeAttribute("hidden");
+                }
+                
+                const originalUpdateNoise = gZenThemePicker.updateNoise;
+                gZenThemePicker.updateNoise = () => {};
+                const fakeWindow = {
+                  document: {
+                    documentElement: {
+                      style: {
+                        setProperty: () => {},
+                      },
+                      setAttribute: () => {},
+                      removeAttribute: () => {},
+                    },
+                    getElementById: document.getElementById.bind(document),
+                    querySelectorAll: document.querySelectorAll.bind(document),
+                  },
+                  gZenThemePicker,
+                  gZenWorkspaces: {
+                    getActiveWorkspace: () => {
+                      return { uuid: group.id };
+                    },
+                    workspaceElement: () => {
+                      return null;
+                    },
+                  },
+                }
+
+                const originalWm = Services.wm;
+                Services.wm = {
+                  getEnumerator: () => {
+                    return [fakeWindow];
+                  }
+                }
+
+                gZenThemePicker.onWorkspaceChange(
+                  { uuid: group.id },
+                  true,
+                  {
+                    type: undefined,
+                    gradientColors: colors,
+                    opacity: gZenThemePicker.currentOpacity,
+                    texture: gZenThemePicker.currentTexture
+                  }
+                );
+
+                Services.wm = originalWm;
+                gZenThemePicker.updateNoise = originalUpdateNoise;
+              } catch (error) {
+                console.error(
+                  "[AdvancedTabGroups] Error applying color to group:",
+                  error
+                );
+              }
+            };
+
+            // Now click the button to open the picker
+            existingButton.click();
+
+            resetPickerDots();
+
+            const previousOpacity = gZenThemePicker.currentOpacity;
+            const previousTexture = gZenThemePicker.currentTexture;
+
+            if (faviconColor) {
+              theme = {
+                gradientColors: [
+                  {
+                    c: faviconColor,
+                    isCustom: false,
+                    isPrimary: true,
+                    lightness: 50,
+                    position: gZenThemePicker.calculateInitialPosition(faviconColor),
+                    type: "undefined"
+                  }
+                ],
+                opacity: 1,
+                texture: 0
+              }
+            }
+
+            if (theme && typeof theme === "object" && theme.gradientColors?.length) {
+              clickToAdd.setAttribute("hidden", "true");
+              gZenThemePicker.recalculateDots(theme.gradientColors ?? []);
+              gZenThemePicker.currentOpacity = theme.opacity;
+              gZenThemePicker.currentTexture = theme.texture;
+            }
+
+            // Set up a listener for when the panel closes to apply the final color and cleanup
+            const panel = window.gZenThemePicker.panel;
+            const handlePanelClose = () => {
+              try {
+                // Get the final color from the dots using the same logic
+                const colors = this.savedColors;
+                colors[group.id] = {
+                  gradientColors: calculateColor(),
+                  opacity: gZenThemePicker.currentOpacity,
+                  texture: gZenThemePicker.currentTexture
+                };
+                this.savedColors = colors;
+
+                // CRITICAL: Clean up all references and restore original methods
+                gZenThemePicker.updateCurrentWorkspace = originalUpdateMethod;
+                gZenThemePicker.currentOpacity = previousOpacity;
+                gZenThemePicker.currentTexture = previousTexture;
+
+                resetPickerDots();
+                gZenThemePicker.recalculateDots(
+                  gZenWorkspaces.getActiveWorkspace().theme.gradientColors
+                );
+
+                // Remove the event listener
+                panel.removeEventListener("popuphidden", handlePanelClose);
+              } catch (error) {
+                console.error(
+                  "[AdvancedTabGroups] Error during cleanup:",
+                  error
+                );
+              }
+            };
+
+            panel.addEventListener("popuphidden", handlePanelClose);
+          }
+        } catch (error) {
+          console.error(
+            "[AdvancedTabGroups] Error opening gradient picker:",
+            error
+          );
+        }
+      } else {
+        console.warn("[AdvancedTabGroups] Gradient picker not available");
+      }
     };
 
-    group._useFaviconColor = () => {
+    group._useFaviconColor = async () => {
       // Capture 'this' for use in callbacks
       const self = this;
 
       try {
         // Get all favicon images directly from the group
         const favicons = group.querySelectorAll(".tab-icon-image");
-        if (favicons.length === 0) {
-          return;
-        }
 
         // Extract colors from favicons
         const colors = [];
-        let processedCount = 0;
-        const totalFavicons = favicons.length;
 
-        favicons.forEach((favicon, index) => {
+        for (const [index, favicon] of Array.from(favicons).entries()) {
           if (favicon && favicon.src && favicon.src !== "chrome://global/skin/icons/defaultFavicon.svg") {
             // Create a canvas to analyze the favicon
             const canvas = document.createElement("canvas");
@@ -736,6 +983,9 @@ class AdvancedTabGroups {
 
             // Set crossOrigin to handle CORS issues
             img.crossOrigin = "anonymous";
+
+            let processedResolve;
+            const processedPromise = new Promise(r => processedResolve = r);
 
             img.onload = () => {
               try {
@@ -778,25 +1028,7 @@ class AdvancedTabGroups {
                   colors.push(avgColor);
                 }
 
-                processedCount++;
-
-                // If this is the last favicon processed, calculate average and apply
-                if (processedCount === totalFavicons) {
-                  if (colors.length > 0) {
-                    const finalColor = self._calculateAverageColor(colors);
-                    const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                    // Set the --tab-group-color CSS variable
-                    group.style.setProperty("--tab-group-color", colorString);
-                    group.style.setProperty(
-                      "--tab-group-color-invert",
-                      colorString
-                    );
-
-                    // Save the color to persistent storage
-                    self.saveTabGroupColors();
-                  }
-                }
+                processedResolve(true);
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error processing favicon",
@@ -804,77 +1036,45 @@ class AdvancedTabGroups {
                   ":",
                   error
                 );
-                processedCount++;
-
-                // Still check if we're done processing
-                if (processedCount === totalFavicons && colors.length > 0) {
-                  const finalColor = self._calculateAverageColor(colors);
-                  const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                  group.style.setProperty("--tab-group-color", colorString);
-                  group.style.setProperty(
-                    "--tab-group-color-invert",
-                    colorString
-                  );
-
-                  self.saveTabGroupColors();
-                }
               }
             };
 
             img.onerror = () => {
               console.warn("[AdvancedTabGroups] Failed to load favicon:", favicon.src);
-              processedCount++;
-
-              // Check if we're done processing
-              if (processedCount === totalFavicons && colors.length > 0) {
-                const finalColor = self._calculateAverageColor(colors);
-                const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                group.style.setProperty("--tab-group-color", colorString);
-                group.style.setProperty(
-                  "--tab-group-color-invert",
-                  colorString
-                );
-
-                self.saveTabGroupColors();
-              }
+              processedResolve(true);
             };
 
             // Add timeout to prevent hanging
             setTimeout(() => {
               if (img.complete === false) {
                 console.warn("[AdvancedTabGroups] Favicon load timeout:", favicon.src);
-                processedCount++;
-                
-                if (processedCount === totalFavicons && colors.length > 0) {
-                  const finalColor = self._calculateAverageColor(colors);
-                  const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-                  group.style.setProperty("--tab-group-color", colorString);
-                  group.style.setProperty("--tab-group-color-invert", colorString);
-
-                  self.saveTabGroupColors();
-                }
+                processedResolve(true);
               }
             }, 3000);
 
             img.src = favicon.src;
-          } else {
-            processedCount++;
 
-            // Check if we're done processing
-            if (processedCount === totalFavicons && colors.length > 0) {
-              const finalColor = self._calculateAverageColor(colors);
-              const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-
-              group.style.setProperty("--tab-group-color", colorString);
-              group.style.setProperty("--tab-group-color-invert", colorString);
-
-              self.saveTabGroupColors();
-            }
+            await processedPromise;
           }
-        });
+        };
+
+        if (colors.length > 0) {
+          this.getGroupById(group.id).color = `${group.id}-favicon`;
+
+          const finalColor = self._calculateAverageColor(colors);
+          const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
+        
+          document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
+          document.documentElement.style.setProperty(
+            `--tab-group-color-${group.id}-favicon-invert`,
+            colorString
+          );
+        
+          this.updateIconColor(group, finalColor);
+          this.saveTabGroupColors();
+
+          return finalColor;
+        }
       } catch (error) {
         console.error(
           "[AdvancedTabGroups] Error extracting favicon colors:",
@@ -886,8 +1086,6 @@ class AdvancedTabGroups {
 
   // New method to convert group to folder
   convertGroupToFolder(group) {
-    
-
     try {
       // Check if Zen folders functionality is available
       if (!window.gZenFolders) {
@@ -929,9 +1127,10 @@ class AdvancedTabGroups {
           );
         }
 
-        // Remove the saved color and icon for the original group
+        // Remove the saved color, icon, and collapsed state for the original group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         
       } else {
@@ -946,7 +1145,6 @@ class AdvancedTabGroups {
   }
 
   convertFolderToGroup(folder) {
-    
     try {
       const tabsToGroup = folder.allItemsRecursive.filter(
         (item) => gBrowser.isTab(item) && !item.hasAttribute("zen-empty-tab")
@@ -1010,62 +1208,6 @@ class AdvancedTabGroups {
         "[AdvancedTabGroups] Error converting folder to group:",
         error
       );
-    }
-  }
-
-  // Change group icon using the Zen emoji picker (SVG icons only)
-  async changeGroupIcon(group) {
-    try {
-      // Check if the Zen emoji picker is available
-      if (!window.gZenEmojiPicker) {
-        console.error("[AdvancedTabGroups] Zen emoji picker not available");
-        return;
-      }
-
-      // Find the icon container in the group
-      const iconContainer = group.querySelector(".tab-group-icon-container");
-      if (!iconContainer) {
-        console.error(
-          "[AdvancedTabGroups] Icon container not found for group:",
-          group.id
-        );
-        return;
-      }
-
-      // Find the icon element (create if it doesn't exist)
-      let iconElement = iconContainer.querySelector(".tab-group-icon");
-      if (!iconElement) {
-        iconElement = document.createElement("div");
-        iconElement.className = "tab-group-icon";
-        iconContainer.appendChild(iconElement);
-      }
-
-      // Open the emoji picker with SVG icons only
-      const selectedIcon = await window.gZenEmojiPicker.open(iconElement, {
-        onlySvgIcons: true,
-      });
-
-      if (selectedIcon) {
-        // Clear any existing icon content
-        iconElement.innerHTML = "";
-
-        // Create an image element for the SVG icon using parsed XUL
-        const imgFrag = window.MozXULElement.parseXULToFragment(`
-          <image src="${selectedIcon}" class="group-icon" alt="Group Icon"/>
-        `);
-        iconElement.appendChild(imgFrag.firstElementChild);
-
-        // Save the icon to persistent storage
-        this.saveGroupIcon(group.id, selectedIcon);
-      } else if (selectedIcon === null) {
-        // Clear the icon content
-        iconElement.innerHTML = "";
-
-        // Remove the icon from persistent storage
-        this.removeSavedIcon(group.id);
-      }
-    } catch (error) {
-      console.error("[AdvancedTabGroups] Error changing group icon:", error);
     }
   }
 
@@ -1139,133 +1281,69 @@ class AdvancedTabGroups {
   }
 
   // Save tab group colors to persistent storage
-  async saveTabGroupColors() {
+  saveTabGroupColors() {
     try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        const colors = {};
-
-        // Use gBrowser.tabGroups if available (more efficient)
-        if (gBrowser.tabGroups) {
-          gBrowser.tabGroups.forEach((group) => {
-            if (group.id && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-              const color = group.style.getPropertyValue("--tab-group-color");
-              if (color && color !== "") {
-                colors[group.id] = color;
-              }
-            }
-          });
-        } else {
-          // Fallback to DOM query
-          const groups = document.querySelectorAll("tab-group");
-          groups.forEach((group) => {
-            if (group.id && !group.hasAttribute("split-view-group")) {
-              const color = group.style.getPropertyValue("--tab-group-color");
-              if (color && color !== "") {
-                colors[group.id] = color;
-              }
-            }
-          });
-        }
-
-        // Save to file
-        const jsonData = JSON.stringify(colors, null, 2);
-        await UC_API.FileSystem.writeFile("tab_group_colors.json", jsonData);
-      } else {
-        console.warn(
-          "[AdvancedTabGroups] UC_API.FileSystem not available, using localStorage fallback"
-        );
-        // Fallback to localStorage if UC_API is not available
-        const colors = {};
-        
-        if (gBrowser.tabGroups) {
-          gBrowser.tabGroups.forEach((group) => {
-            if (group.id && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-              const color = group.style.getPropertyValue("--tab-group-color");
-              if (color && color !== "") {
-                colors[group.id] = color;
-              }
-            }
-          });
-        } else {
-          const groups = document.querySelectorAll("tab-group");
-          groups.forEach((group) => {
-            if (group.id && !group.hasAttribute("split-view-group")) {
-              const color = group.style.getPropertyValue("--tab-group-color");
-              if (color && color !== "") {
-                colors[group.id] = color;
-              }
-            }
-          });
-        }
-        
-        localStorage.setItem(
-          "advancedTabGroups_colors",
-          JSON.stringify(colors)
-        );
-      }
+      // This method is called from _useFaviconColor, but the main color saving
+      // is handled in the color picker's handlePanelClose function.
+      // We don't need to override the complex color objects with simple strings.
+      console.log("[AdvancedTabGroups] Color saving handled by color picker");
     } catch (error) {
-      console.error(
-        "[AdvancedTabGroups] Error saving tab group colors:",
-        error
-      );
+      console.error("[AdvancedTabGroups] Error in saveTabGroupColors:", error);
     }
   }
 
-  // Load saved tab group colors from persistent storage
-  async loadSavedColors() {
+  get savedColors() {
+    const colors = SessionStore.getCustomWindowValue(window, "tabGroupColors");
+    console.log("[AdvancedTabGroups] Retrieved colors from SessionStore:", colors);
+    if (colors && colors !== "") {
+      try {
+        const parsed = JSON.parse(colors);
+        console.log("[AdvancedTabGroups] Parsed colors:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved colors:", error);
+        return {};
+      }
+    }
+    return {};
+  }
+
+  set savedColors(value) {
     try {
-      let colors = {};
-
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          // Try to read from file
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_colors.json"
-          );
-          if (fsResult.isContent()) {
-            colors = JSON.parse(fsResult.content());
-          }
-        } catch (fileError) {
-          // No saved color file found
-        }
-      } else {
-        // Fallback to localStorage
-        const savedColors = localStorage.getItem("advancedTabGroups_colors");
-        if (savedColors) {
-          colors = JSON.parse(savedColors);
-        }
-      }
-
-      // Apply colors to existing groups
-      if (Object.keys(colors).length > 0) {
-        setTimeout(() => {
-          this.applySavedColors(colors);
-        }, 500); // Small delay to ensure groups are fully loaded
-      }
+      console.log("[AdvancedTabGroups] Saving colors to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupColors", JSON.stringify(value));
     } catch (error) {
-      console.error("[AdvancedTabGroups] Error loading saved colors:", error);
+      console.error("[AdvancedTabGroups] Error saving colors to SessionStore:", error);
     }
   }
 
   // Apply saved colors to tab groups
-  applySavedColors(colors) {
+  applySavedColors() {
     try {
-      Object.entries(colors).forEach(([groupId, color]) => {
-        // Try to find the group using gBrowser.tabGroups first
-        let group = null;
-        
-        if (gBrowser.tabGroups) {
-          group = Array.from(gBrowser.tabGroups).find(g => g.id === groupId);
+      Object.entries(this.savedColors).forEach(async ([groupId, color]) => {
+        // Handle new format (object with gradientColors, opacity, texture)
+        if (typeof color === 'object' && color.gradientColors) {
+          const previousOpacity = gZenThemePicker.currentOpacity;
+          gZenThemePicker.currentOpacity = color.opacity || 1;
+
+          const gradient = gZenThemePicker.getGradient(color.gradientColors);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
+
+          gZenThemePicker.currentOpacity = previousOpacity;
+
+          if (color.texture) {
+            const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+            if (group) {
+              group.style.setProperty("--group-grain", color.texture);
+              group.setAttribute("show-grain", color.texture > 0);
+            }
+          }
         }
-        
-        // Fallback to DOM query if not found or gBrowser.tabGroups not available
-        if (!group) {
-          group = document.getElementById(groupId);
-        }
-        
-        if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-          group.style.setProperty("--tab-group-color", color);
-          group.style.setProperty("--tab-group-color-invert", color);
+        // Handle old format (simple color string) for backward compatibility
+        else if (typeof color === 'string' && color.trim() !== '') {
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, color);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, color);
         }
       });
     } catch (error) {
@@ -1274,150 +1352,98 @@ class AdvancedTabGroups {
   }
 
   // Remove saved color for a specific tab group
-  async removeSavedColor(groupId) {
+  removeSavedColor(groupId) {
     try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          // Read current colors
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_colors.json"
-          );
-          if (fsResult.isContent()) {
-            const colors = JSON.parse(fsResult.content());
-            delete colors[groupId];
-
-            // Save updated colors
-            const jsonData = JSON.stringify(colors, null, 2);
-            await UC_API.FileSystem.writeFile(
-              "tab_group_colors.json",
-              jsonData
-            );
-          }
-        } catch (fileError) {
-          // No saved color file found
-        }
-      } else {
-        // Fallback to localStorage
-        const savedColors = localStorage.getItem("advancedTabGroups_colors");
-        if (savedColors) {
-          const colors = JSON.parse(savedColors);
-          delete colors[groupId];
-          localStorage.setItem(
-            "advancedTabGroups_colors",
-            JSON.stringify(colors)
-          );
-        }
-      }
+      const colors = this.savedColors;
+      delete colors[groupId];
+      this.savedColors = colors;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved color:", error);
     }
   }
 
-  // Save group icon to persistent storage
-  async saveGroupIcon(groupId, iconUrl) {
-    try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        // Read current icons
-        let icons = {};
-        try {
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            icons = JSON.parse(fsResult.content());
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
-
-        // Update with new icon
-        icons[groupId] = iconUrl;
-
-        // Save to file
-        const jsonData = JSON.stringify(icons, null, 2);
-        await UC_API.FileSystem.writeFile("tab_group_icons.json", jsonData);
-      } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        let icons = savedIcons ? JSON.parse(savedIcons) : {};
-        icons[groupId] = iconUrl;
-        localStorage.setItem("advancedTabGroups_icons", JSON.stringify(icons));
+  get savedIcons() {
+    const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
+    console.log("[AdvancedTabGroups] Retrieved icons from SessionStore:", icons);
+    if (icons && icons !== "") {
+      try {
+        const parsed = JSON.parse(icons);
+        console.log("[AdvancedTabGroups] Parsed icons:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved icons:", error);
+        return {};
       }
+    }
+    return {};
+  }
+
+  set savedIcons(value) {
+    try {
+      console.log("[AdvancedTabGroups] Saving icons to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupIcons", JSON.stringify(value));
     } catch (error) {
-      console.error("[AdvancedTabGroups] Error saving group icon:", error);
+      console.error("[AdvancedTabGroups] Error saving icons to SessionStore:", error);
     }
   }
 
-  // Load saved group icons from persistent storage
-  async loadGroupIcons() {
-    try {
-      let icons = {};
+  // Save group icon to persistent storage
+  saveGroupIcon(groupId, iconUrl) {
+    const icons = this.savedIcons;
+    icons[groupId] = iconUrl;
+    this.savedIcons = icons;
+  }
 
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            icons = JSON.parse(fsResult.content());
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
+  async applyGroupIcon(group, iconUrl = null) {
+    const iconContainer = await this.waitForElm(`tab-group[id="${group.id}"] .tab-group-icon-container`);
+    let iconElement = iconContainer.querySelector(".tab-group-icon");
+    if (!iconElement) {
+      iconElement = document.createElement("div");
+      iconElement.className = "tab-group-icon";
+      iconContainer.appendChild(iconElement);
+    }
+
+    // Open the emoji picker with SVG icons only
+    if (!iconUrl) {
+      iconUrl = await window.gZenEmojiPicker.open(iconElement, {
+        onlySvgIcons: !Services.prefs.getBoolPref("browser.tabs.groups.allow-emojis", false)
+      });
+    }
+  
+    iconElement.querySelector("image")?.remove();
+    iconElement.querySelector("label")?.remove();
+
+    if (iconUrl) {
+      // Create an image element for the SVG icon using parsed XUL
+      let imgFrag;
+      if (iconUrl.endsWith(".svg")) {
+        imgFrag = window.MozXULElement.parseXULToFragment(`
+          <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
+        `);
       } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        if (savedIcons) {
-          icons = JSON.parse(savedIcons);
-        }
+        imgFrag = window.MozXULElement.parseXULToFragment(`
+          <label>${iconUrl}</label>
+        `);
       }
+      iconElement.appendChild(imgFrag.firstElementChild);
 
-      // Apply icons to existing groups
-      if (Object.keys(icons).length > 0) {
-        setTimeout(() => {
-          this.applySavedIcons(icons);
-        }, 500); // Small delay to ensure groups are fully loaded
-      }
-    } catch (error) {
-      console.error("[AdvancedTabGroups] Error loading saved icons:", error);
+      this.updateIconColor(group, this.savedColors[group.id]?.gradientColors || [])
+    
+      // Save the icon to persistent storage
+      this.saveGroupIcon(group.id, iconUrl);
+    } else {
+      // Remove the icon from persistent storage
+      this.removeSavedIcon(group.id);
     }
   }
 
   // Apply saved icons to tab groups
-  applySavedIcons(icons) {
+  applySavedIcons() {
     try {
-      Object.entries(icons).forEach(([groupId, iconUrl]) => {
-        // Try to find the group using gBrowser.tabGroups first
-        let group = null;
-        
-        if (gBrowser.tabGroups) {
-          group = Array.from(gBrowser.tabGroups).find(g => g.id === groupId);
-        }
-        
-        // Fallback to DOM query if not found or gBrowser.tabGroups not available
-        if (!group) {
-          group = document.getElementById(groupId);
-        }
-        
+      Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
+        const group = this.getGroupById(groupId);
         if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-          const iconContainer = group.querySelector(
-            ".tab-group-icon-container"
-          );
-          if (iconContainer) {
-            let iconElement = iconContainer.querySelector(".tab-group-icon");
-            if (!iconElement) {
-              iconElement = document.createElement("div");
-              iconElement.className = "tab-group-icon";
-              iconContainer.appendChild(iconElement);
-            }
-
-            // Clear any existing content and add the icon
-            iconElement.innerHTML = "";
-            const imgFrag = window.MozXULElement.parseXULToFragment(`
-              <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
-            `);
-            iconElement.appendChild(imgFrag.firstElementChild);
-          }
+          this.applyGroupIcon(group, iconUrl);
         }
       });
     } catch (error) {
@@ -1426,63 +1452,103 @@ class AdvancedTabGroups {
   }
 
   // Remove saved icon for a specific tab group
-  async removeSavedIcon(groupId) {
+  removeSavedIcon(groupId) {
     try {
-      if (typeof UC_API !== "undefined" && UC_API.FileSystem) {
-        try {
-          // Read current icons
-          const fsResult = await UC_API.FileSystem.readFile(
-            "tab_group_icons.json"
-          );
-          if (fsResult.isContent()) {
-            const icons = JSON.parse(fsResult.content());
-            delete icons[groupId];
-
-            // Save updated icons
-            const jsonData = JSON.stringify(icons, null, 2);
-            await UC_API.FileSystem.writeFile("tab_group_icons.json", jsonData);
-          }
-        } catch (fileError) {
-          // No saved icon file found
-        }
-      } else {
-        // Fallback to localStorage
-        const savedIcons = localStorage.getItem("advancedTabGroups_icons");
-        if (savedIcons) {
-          const icons = JSON.parse(savedIcons);
-          delete icons[groupId];
-          localStorage.setItem(
-            "advancedTabGroups_icons",
-            JSON.stringify(icons)
-          );
-        }
-      }
+      const icons = this.savedIcons;
+      delete icons[groupId];
+      this.savedIcons = icons;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved icon:", error);
+    }
+  }
+
+  // Collapsed state management
+  get savedCollapsedStates() {
+    const states = SessionStore.getCustomWindowValue(window, "tabGroupCollapsedStates");
+    console.log("[AdvancedTabGroups] Retrieved collapsed states from SessionStore:", states);
+    if (states && states !== "") {
+      try {
+        const parsed = JSON.parse(states);
+        console.log("[AdvancedTabGroups] Parsed collapsed states:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved collapsed states:", error);
+        return {};
+      }
+    }
+    return {};
+  }
+
+  set savedCollapsedStates(value) {
+    try {
+      console.log("[AdvancedTabGroups] Saving collapsed states to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupCollapsedStates", JSON.stringify(value));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving collapsed states to SessionStore:", error);
+    }
+  }
+
+  // Save group collapsed state to persistent storage
+  saveGroupCollapsedState(groupId, isCollapsed) {
+    try {
+      const states = this.savedCollapsedStates;
+      if (isCollapsed) {
+        states[groupId] = true;
+      } else {
+        // Remove the entry if not collapsed (saves space)
+        delete states[groupId];
+      }
+      this.savedCollapsedStates = states;
+      console.log(`[AdvancedTabGroups] Saved collapsed state for group ${groupId}: ${isCollapsed}`);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving collapsed state:", error);
+    }
+  }
+
+  // Apply saved collapsed states to tab groups
+  applySavedCollapsedStates() {
+    try {
+      const states = this.savedCollapsedStates;
+      Object.entries(states).forEach(([groupId, isCollapsed]) => {
+        if (isCollapsed) {
+          // Use waitForElm to handle groups that might not be ready yet
+          this.waitForElm(`tab-group[id="${groupId}"]`).then(group => {
+            if (group && !group.hasAttribute("split-view-group")) {
+              group.setAttribute("collapsed", "true");
+              console.log(`[AdvancedTabGroups] Applied collapsed state to group ${groupId}`);
+            }
+          }).catch(error => {
+            console.warn(`[AdvancedTabGroups] Group ${groupId} not found for collapsed state restoration:`, error);
+          });
+        }
+      });
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error applying saved collapsed states:", error);
+    }
+  }
+
+  // Remove saved collapsed state for a specific tab group
+  removeSavedCollapsedState(groupId) {
+    try {
+      const states = this.savedCollapsedStates;
+      delete states[groupId];
+      this.savedCollapsedStates = states;
+      console.log(`[AdvancedTabGroups] Removed collapsed state for group ${groupId}`);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing saved collapsed state:", error);
     }
   }
 
   // Public method to manually trigger color update for all groups
   updateAllGroupColors() {
     try {
-      if (gBrowser.tabGroups) {
-        gBrowser.tabGroups.forEach((group) => {
-          if (!group.hasAttribute || !group.hasAttribute("split-view-group")) {
-            if (typeof group._useFaviconColor === "function") {
-              group._useFaviconColor();
-            }
+      this.tabGroups.forEach((group) => {
+        if (!group.hasAttribute || !group.hasAttribute("split-view-group")) {
+          if (typeof group._useFaviconColor === "function" && group.color.endsWith("favicon")) {
+            group._useFaviconColor();
           }
-        });
-      } else {
-        const groups = document.querySelectorAll("tab-group");
-        groups.forEach((group) => {
-          if (!group.hasAttribute("split-view-group")) {
-            if (typeof group._useFaviconColor === "function") {
-              group._useFaviconColor();
-            }
-          }
-        });
-      }
+        }
+      });
       console.log("[AdvancedTabGroups] Manual color update triggered for all groups");
     } catch (error) {
       console.error("[AdvancedTabGroups] Error updating all group colors:", error);
@@ -1506,24 +1572,21 @@ class AdvancedTabGroups {
           updateColors: () => globalThis.advancedTabGroups.updateAllGroupColors(),
           refreshVisibility: () => globalThis.advancedTabGroups.refreshGroupVisibility(),
           processExisting: () => globalThis.advancedTabGroups.processExistingGroups(),
+          applyCollapsedStates: () => globalThis.advancedTabGroups.applySavedCollapsedStates(),
           getGroups: () => {
-            if (gBrowser.tabGroups) {
-              return Array.from(gBrowser.tabGroups).map(g => ({
-                id: g.id,
-                label: g.label,
-                hasContextMenu: !!g._contextMenuAdded,
-                hasColorFunction: typeof g._useFaviconColor === "function"
-              }));
-            } else {
-              const groups = document.querySelectorAll("tab-group");
-              return Array.from(groups).map(g => ({
-                id: g.id,
-                label: g.label,
-                hasContextMenu: !!g._contextMenuAdded,
-                hasColorFunction: typeof g._useFaviconColor === "function"
-              }));
-            }
-          }
+            return globalThis.advancedTabGroups.tabGroups.map(g => ({
+              id: g.id,
+              label: g.label,
+              collapsed: g.hasAttribute("collapsed"),
+              hasContextMenu: !!g._contextMenuAdded,
+              hasColorFunction: typeof g._useFaviconColor === "function"
+            }));
+          },
+          getSavedStates: () => ({
+            colors: globalThis.advancedTabGroups.savedColors,
+            icons: globalThis.advancedTabGroups.savedIcons,
+            collapsedStates: globalThis.advancedTabGroups.savedCollapsedStates
+          })
         };
         
         console.log("[AdvancedTabGroups] Debug functions available at globalThis.debugAdvancedTabGroups");
@@ -1534,13 +1597,6 @@ class AdvancedTabGroups {
     } else {
         window.addEventListener("load", initATG);
     }
-
-    // Clean up when the page is about to unload
-    window.addEventListener("beforeunload", () => {
-      if (globalThis.advancedTabGroups) {
-        globalThis.advancedTabGroups.saveTabGroupColors();
-      }
-    });
 
     // Hide tab group menu items for folders and inactive workspace groups in tab context menu
     const tabContextMenu = document.getElementById("tabContextMenu");
@@ -1556,18 +1612,9 @@ class AdvancedTabGroups {
         const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
         
         // Use gBrowser.tabGroups to find inactive groups (more efficient)
-        let inactiveGroupIds = [];
-        if (gBrowser.tabGroups) {
-          inactiveGroupIds = Array.from(gBrowser.tabGroups)
-            .filter(g => !activeGroupIds.has(g.id) && (!g.hasAttribute || !g.hasAttribute("split-view-group")))
-            .map(g => g.id);
-        } else {
-          // Fallback to DOM query if gBrowser.tabGroups is not available
-          const allGroups = document.querySelectorAll("tab-group");
-          inactiveGroupIds = Array.from(allGroups)
-            .filter(g => !activeGroupIds.has(g.id) && !g.hasAttribute("split-view-group"))
-            .map(g => g.id);
-        }
+        let inactiveGroupIds = gBrowser.tabGroups
+          .filter(g => !activeGroupIds.has(g.id) && (!g.hasAttribute || !g.hasAttribute("split-view-group")))
+          .map(g => g.id);
 
         // Combine folders and inactive groups to hide
         const itemsToHide = [...foldersToHide, ...inactiveGroupIds];

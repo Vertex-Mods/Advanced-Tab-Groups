@@ -1,13 +1,25 @@
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ====== v3.3.0s ====== */
+/* ====== v3.4.0s ====== */
 tab-group:not([split-view-group]) {
-  --advanced-tab-color: var(--tab-group-color);
-  --tab-group-color-pale: transparent !important;
     --tab-group-stroke: light-dark(
     color-mix(in srgb, var(--zen-primary-color) 60%, black),
     color-mix(in srgb, var(--zen-colors-primary) 20%, var(--toolbox-textcolor)));
   
+    @media not (-moz-pref("browser.tabs.groups.arc-style")) {
+      &[show-grain="true"] .grain {
+        display: flex;
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-image: url(chrome://browser/content/zen-images/grain-bg.png);
+        pointer-events: none;
+        z-index: 1;
+        opacity: var(--group-grain, 0);
+        mix-blend-mode: overlay;
+        border-radius: 4px;
+      }
+    }
 
   .tab-group-label-container {
     height: 36px !important;
@@ -25,22 +37,6 @@ tab-group:not([split-view-group]) {
 
     &:hover {
       background-color: var(--tab-hover-background-color) !important;
-
-      @media (-moz-bool-pref: "browser.tabs.groups.stash-icon") {
-        .group-stash-button {
-          -moz-window-dragging: no-drag !important;
-          visibility: visible !important;
-          list-style-image: url("chrome://browser/skin/taskbar-tabs-add-tab.svg");
-          /*list-style-image: url("chrome://browser/skin/taskbar-tabs-move-tab.svg");*/
-          width: 16px;
-          height: 16px;
-          margin-inline: auto 0;
-          -moz-context-properties: fill, fill-opacity;
-          fill: currentColor;
-          scale: 0.85;
-        }
-      }
-
       .tab-close-button {
         -moz-window-dragging: no-drag !important;
         visibility: visible !important;
@@ -62,20 +58,29 @@ tab-group:not([split-view-group]) {
       border-radius: 4px;
       position: relative;
       fill: var(--tab-group-stroke) !important;
-      background: var(--advanced-tab-color);
+      background: var(--tab-group-color);
+
       &[zen-emoji-open='true']::before {
         border: 1px dashed light-dark(rgba(0, 0, 0, .5), rgba(255, 255, 255, .5));
         border-radius: 6px;
-        width: 18px;
-        height: 18px;
         content: '';
         position: absolute;
         pointer-events: none;
       }
+
       .group-icon {
-        width: 16px;
-        height: 16px;
         display: block;
+        width: 12px;
+        height: 12px;
+        fill: white;
+        @media (-moz-pref("browser.tabs.groups.arc-style")) {
+          width: 16px;
+          height: 16px;
+        }
+      }
+
+      & label {
+        transform: translate(-1px, -1px);
       }
     }
 
@@ -107,15 +112,18 @@ tab-group:not([split-view-group]) {
     position: relative;
     margin-inline-start: 12px !important;
 
-    &::after {
-      content: "";
+    .grain, &::after {
       position: absolute;
       left: -2px !important;
       top: 0;
-      background: var(--advanced-tab-color);
       height: 100%;
       width: 2px;
       pointer-events: none !important;
+    }
+
+    &::after {
+      content: "";
+      background: var(--tab-group-color);
     }
 
     tab {
@@ -139,14 +147,13 @@ tab-group:not([split-view-group]) {
 }
 
 /* Arc-like group styling */
-@media (-moz-bool-pref: "browser.tabs.groups.arc-style") {
+@media (-moz-pref("browser.tabs.groups.arc-style")) {
   /* Hide the color context menu options */
   #advanced-tab-groups-context-menu {
     .change-group-color {
       display: none !important;
     }
   }
-  
   
   tab-group:not([split-view-group]) {
     .tab-group-label-container {
@@ -158,20 +165,25 @@ tab-group:not([split-view-group]) {
       
       .tab-group-icon-container {
         margin: 0 0 0 10px !important;
-          display: none !important;
+        display: none !important;
+
         .tab-group-icon {
           background: none !important;
         }
-          &:has(.group-icon) {
-            display: flex !important;
-          }
-          &:has(.tab-group-icon[zen-emoji-open='true']) {
-            display: flex !important;
-          }
-          & .group-icon {
-            width: 14px !important;
-            height: 14px !important;
-          }
+
+        &:has(.group-icon) {
+          display: flex !important;
+        }
+      
+        &:has(.tab-group-icon[zen-emoji-open='true']) {
+          display: flex !important;
+        }
+        
+        & .group-icon {
+          width: 14px !important;
+          height: 14px !important;
+          fill: light-dark(black, white) !important;
+        }
       }
 
       .tab-group-label {

@@ -8,11 +8,16 @@
   },
   {
     "type": "separator",
-    "label": "Other Styles"
+    "label": "Configurations"
   },
   {
     "property": "browser.tabs.groups.arc-style",
     "type": "checkbox",
     "label": "Apply Arc-like group styling"
+  },
+  {
+    "property": "browser.tabs.groups.allow-emojis",
+    "type": "checkbox",
+    "label": "Allow emojis as icons for tab groups"
   }
 ]

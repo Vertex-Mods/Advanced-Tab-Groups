@@ -1252,44 +1252,68 @@ class AdvancedTabGroups {
 
   // Save tab group colors to persistent storage
   saveTabGroupColors() {
-    const colors = this.savedColors;
-    this.tabGroups.forEach(group => {
-      colors[group.id] = window.getComputedStyle(document.head).getPropertyValue(`--tab-group-color-${group.id}`);
-    });
-    this.savedColors = colors;
+    try {
+      // This method is called from _useFaviconColor, but the main color saving
+      // is handled in the color picker's handlePanelClose function.
+      // We don't need to override the complex color objects with simple strings.
+      console.log("[AdvancedTabGroups] Color saving handled by color picker");
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error in saveTabGroupColors:", error);
+    }
   }
 
   get savedColors() {
     const colors = SessionStore.getCustomWindowValue(window, "tabGroupColors");
-    if (colors !== "") {
-      return JSON.parse(colors);
+    console.log("[AdvancedTabGroups] Retrieved colors from SessionStore:", colors);
+    if (colors && colors !== "") {
+      try {
+        const parsed = JSON.parse(colors);
+        console.log("[AdvancedTabGroups] Parsed colors:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved colors:", error);
+        return {};
+      }
     }
     return {};
   }
 
   set savedColors(value) {
-    SessionStore.setCustomWindowValue(window, "tabGroupColors", JSON.stringify(value));
+    try {
+      console.log("[AdvancedTabGroups] Saving colors to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupColors", JSON.stringify(value));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving colors to SessionStore:", error);
+    }
   }
 
   // Apply saved colors to tab groups
   applySavedColors() {
     try {
       Object.entries(this.savedColors).forEach(async ([groupId, color]) => {
-        if (color.gradientColors) {
+        // Handle new format (object with gradientColors, opacity, texture)
+        if (typeof color === 'object' && color.gradientColors) {
           const previousOpacity = gZenThemePicker.currentOpacity;
-          gZenThemePicker.currentOpacity = color.opacity;
+          gZenThemePicker.currentOpacity = color.opacity || 1;
 
           const gradient = gZenThemePicker.getGradient(color.gradientColors);
           document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, gradient);
           document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, gradient);
 
           gZenThemePicker.currentOpacity = previousOpacity;
-        }
 
-        if (color.texture) {
-          const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
-          group.style.setProperty("--group-grain", color.texture);
-          group.setAttribute("show-grain", color.texture > 0);
+          if (color.texture) {
+            const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+            if (group) {
+              group.style.setProperty("--group-grain", color.texture);
+              group.setAttribute("show-grain", color.texture > 0);
+            }
+          }
+        }
+        // Handle old format (simple color string) for backward compatibility
+        else if (typeof color === 'string' && color.trim() !== '') {
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}`, color);
+          document.documentElement.style.setProperty(`--tab-group-color-${groupId}-invert`, color);
         }
       });
     } catch (error) {
@@ -1310,14 +1334,27 @@ class AdvancedTabGroups {
 
   get savedIcons() {
     const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
-    if (icons !== "") {
-      return JSON.parse(icons);
+    console.log("[AdvancedTabGroups] Retrieved icons from SessionStore:", icons);
+    if (icons && icons !== "") {
+      try {
+        const parsed = JSON.parse(icons);
+        console.log("[AdvancedTabGroups] Parsed icons:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved icons:", error);
+        return {};
+      }
     }
     return {};
   }
 
   set savedIcons(value) {
-    SessionStore.setCustomWindowValue(window, "tabGroupIcons", JSON.stringify(value));
+    try {
+      console.log("[AdvancedTabGroups] Saving icons to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupIcons", JSON.stringify(value));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving icons to SessionStore:", error);
+    }
   }
 
   // Save group icon to persistent storage
@@ -1360,7 +1397,7 @@ class AdvancedTabGroups {
       }
       iconElement.appendChild(imgFrag.firstElementChild);
 
-      this.updateIconColor(group, this.savedColors[group.id].gradientColors)
+      this.updateIconColor(group, this.savedColors[group.id]?.gradientColors || [])
     
       // Save the icon to persistent storage
       this.saveGroupIcon(group.id, iconUrl);

@@ -20,6 +20,7 @@ class AdvancedTabGroups {
     // Load saved tab group settings
     this.applySavedColors();
     this.applySavedIcons();
+    this.applySavedCollapsedStates();
 
     // Set up observer for all tab groups
     this.setupObserver();
@@ -35,6 +36,9 @@ class AdvancedTabGroups {
 
     // Also try again after a delay to catch any missed groups
     setTimeout(() => this.processExistingGroups(), 1000);
+
+    // Apply saved collapsed states after groups are processed
+    setTimeout(() => this.applySavedCollapsedStates(), 1500);
 
     // Listen for tab group creation events from the platform component
     document.addEventListener(
@@ -364,9 +368,10 @@ class AdvancedTabGroups {
       event.preventDefault();
 
       try {
-        // Remove the group's saved color and icon before removing the group
+        // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
       } catch (error) {
@@ -401,6 +406,9 @@ class AdvancedTabGroups {
 
     // Set up observer to automatically update color when tabs change
     this.setupGroupColorObserver(group);
+
+    // Set up observer to track collapsed state changes
+    this.setupGroupCollapsedObserver(group);
 
     // Add context menu to the group
     this.addContextMenu(group);
@@ -443,6 +451,26 @@ class AdvancedTabGroups {
     observer.observe(group, {
       childList: true,
       subtree: true
+    });
+  }
+
+  // Set up observer to track collapsed state changes
+  setupGroupCollapsedObserver(group) {
+    if (group._collapsedObserverAdded) return;
+    group._collapsedObserverAdded = true;
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
+          // Save the collapsed state when it changes
+          this.saveGroupCollapsedState(group.id, group.hasAttribute("collapsed"));
+        }
+      });
+    });
+
+    observer.observe(group, {
+      attributes: true,
+      attributeFilter: ["collapsed"]
     });
   }
 
@@ -674,9 +702,10 @@ class AdvancedTabGroups {
 
     group._closeGroupFromContextMenu = () => {
       try {
-        // Remove the group's saved color and icon before removing the group
+        // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
         
@@ -1098,9 +1127,10 @@ class AdvancedTabGroups {
           );
         }
 
-        // Remove the saved color and icon for the original group
+        // Remove the saved color, icon, and collapsed state for the original group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedCollapsedState(group.id);
 
         
       } else {
@@ -1432,6 +1462,83 @@ class AdvancedTabGroups {
     }
   }
 
+  // Collapsed state management
+  get savedCollapsedStates() {
+    const states = SessionStore.getCustomWindowValue(window, "tabGroupCollapsedStates");
+    console.log("[AdvancedTabGroups] Retrieved collapsed states from SessionStore:", states);
+    if (states && states !== "") {
+      try {
+        const parsed = JSON.parse(states);
+        console.log("[AdvancedTabGroups] Parsed collapsed states:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved collapsed states:", error);
+        return {};
+      }
+    }
+    return {};
+  }
+
+  set savedCollapsedStates(value) {
+    try {
+      console.log("[AdvancedTabGroups] Saving collapsed states to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupCollapsedStates", JSON.stringify(value));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving collapsed states to SessionStore:", error);
+    }
+  }
+
+  // Save group collapsed state to persistent storage
+  saveGroupCollapsedState(groupId, isCollapsed) {
+    try {
+      const states = this.savedCollapsedStates;
+      if (isCollapsed) {
+        states[groupId] = true;
+      } else {
+        // Remove the entry if not collapsed (saves space)
+        delete states[groupId];
+      }
+      this.savedCollapsedStates = states;
+      console.log(`[AdvancedTabGroups] Saved collapsed state for group ${groupId}: ${isCollapsed}`);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving collapsed state:", error);
+    }
+  }
+
+  // Apply saved collapsed states to tab groups
+  applySavedCollapsedStates() {
+    try {
+      const states = this.savedCollapsedStates;
+      Object.entries(states).forEach(([groupId, isCollapsed]) => {
+        if (isCollapsed) {
+          // Use waitForElm to handle groups that might not be ready yet
+          this.waitForElm(`tab-group[id="${groupId}"]`).then(group => {
+            if (group && !group.hasAttribute("split-view-group")) {
+              group.setAttribute("collapsed", "true");
+              console.log(`[AdvancedTabGroups] Applied collapsed state to group ${groupId}`);
+            }
+          }).catch(error => {
+            console.warn(`[AdvancedTabGroups] Group ${groupId} not found for collapsed state restoration:`, error);
+          });
+        }
+      });
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error applying saved collapsed states:", error);
+    }
+  }
+
+  // Remove saved collapsed state for a specific tab group
+  removeSavedCollapsedState(groupId) {
+    try {
+      const states = this.savedCollapsedStates;
+      delete states[groupId];
+      this.savedCollapsedStates = states;
+      console.log(`[AdvancedTabGroups] Removed collapsed state for group ${groupId}`);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing saved collapsed state:", error);
+    }
+  }
+
   // Public method to manually trigger color update for all groups
   updateAllGroupColors() {
     try {
@@ -1465,14 +1572,21 @@ class AdvancedTabGroups {
           updateColors: () => globalThis.advancedTabGroups.updateAllGroupColors(),
           refreshVisibility: () => globalThis.advancedTabGroups.refreshGroupVisibility(),
           processExisting: () => globalThis.advancedTabGroups.processExistingGroups(),
+          applyCollapsedStates: () => globalThis.advancedTabGroups.applySavedCollapsedStates(),
           getGroups: () => {
-            return this.tabGroups.map(g => ({
+            return globalThis.advancedTabGroups.tabGroups.map(g => ({
               id: g.id,
               label: g.label,
+              collapsed: g.hasAttribute("collapsed"),
               hasContextMenu: !!g._contextMenuAdded,
               hasColorFunction: typeof g._useFaviconColor === "function"
             }));
-          }
+          },
+          getSavedStates: () => ({
+            colors: globalThis.advancedTabGroups.savedColors,
+            icons: globalThis.advancedTabGroups.savedIcons,
+            collapsedStates: globalThis.advancedTabGroups.savedCollapsedStates
+          })
         };
         
         console.log("[AdvancedTabGroups] Debug functions available at globalThis.debugAdvancedTabGroups");

@@ -382,6 +382,9 @@ class AdvancedTabGroups {
     // Remove editor mode class if present (prevent editor mode on new group)
     group.classList.remove("tab-group-editor-mode-create");
 
+    // Add context menu to the group first (this adds _useFaviconColor method)
+    this.addContextMenu(group);
+
     // If the group is new (no label or default label), start renaming and set color
     if (
       !group.label ||
@@ -390,16 +393,18 @@ class AdvancedTabGroups {
     ) {
       // Start renaming
       this.renameGroupStart(group, false); // Don't select all for new groups
-      // Ensure the color is set to the id
-      group.color = group.id;
-      // Set color to average favicon color
+      // Set color to favicon mode (default for new groups)
+      group.color = `${group.id}-favicon`;
+      // Set color to average favicon color (default for new groups)
       if (typeof group._useFaviconColor === "function") {
         group._useFaviconColor();
       }
     } else {
       // For existing groups, also apply favicon color if no color is set
       const currentColor = document.documentElement.style.getPropertyValue(`--tab-group-color-${group.id}`);
-      if (!currentColor && typeof group._useFaviconColor === "function") {
+      const savedColor = this.savedColors[group.id];
+      if (!currentColor && !savedColor && typeof group._useFaviconColor === "function") {
+        group.color = `${group.id}-favicon`;
         group._useFaviconColor();
       }
     }
@@ -409,9 +414,6 @@ class AdvancedTabGroups {
 
     // Set up observer to track collapsed state changes
     this.setupGroupCollapsedObserver(group);
-
-    // Add context menu to the group
-    this.addContextMenu(group);
 
     // Update group visibility based on workspace
     setTimeout(() => this.updateGroupVisibility(), 50);
@@ -642,6 +644,8 @@ class AdvancedTabGroups {
         if (!this._groupEdited) {
           this.renameGroupStart(group, false); // Don't select all for new groups
         }
+        // Set color to favicon mode (default for new groups)
+        group.color = `${group.id}-favicon`;
         if (typeof group._useFaviconColor === "function") {
           setTimeout(() => group._useFaviconColor(), 300);
         }

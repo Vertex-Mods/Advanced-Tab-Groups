@@ -1,0 +1,23 @@
+[
+  {
+    "property": "browser.tabs.groups.enabled",
+    "type": "checkbox",
+    "label": "Enable Tab Groups in the Zen Browser.",
+    "default": "true",
+    "force": "true"
+  },
+  {
+    "type": "separator",
+    "label": "Configurations"
+  },
+  {
+    "property": "browser.tabs.groups.arc-style",
+    "type": "checkbox",
+    "label": "Apply Arc-like group styling"
+  },
+  {
+    "property": "browser.tabs.groups.allow-emojis",
+    "type": "checkbox",
+    "label": "Allow emojis as icons for tab groups"
+  }
+]

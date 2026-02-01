@@ -1,0 +1,31 @@
+{
+    "id": "advanced-tab-groups",
+    "name": "Advanced Tab Groups",
+    "description": "Tab Groups for Zen Browser",
+    "scripts": {
+        "advanced-tab-groups.uc.js": {
+            "include": [
+                "chrome://browser/content/browser.xhtml"
+            ]
+        }
+    },
+    "homepage": "https://github.com/Vertex-Mods/Advanced-Tab-Groups",
+    "preferences": "https://raw.githubusercontent.com/Vertex-Mods/Advanced-Tab-Groups/main/preferences.json",
+    "style": {
+        "chrome": "userChrome.css"
+    },
+    "readme": "https://raw.githubusercontent.com/Vertex-Mods/Advanced-Tab-Groups/main/README.md",
+    "image": "https://raw.githubusercontent.com/Vertex-Mods/Advanced-Tab-Groups/main/image.png",
+    "author": "Vertex",
+    "version": "3.4.0s",
+    "tags": [
+        "Zen Browser",
+        "Vertical Tabs",
+        "Tab Groups",
+        "Tab Folders",
+        "12th"
+    ],
+    "createdAt": "2025-05-25",
+    "updatedAt": "2026-01-26",
+    "fork": ["zen"]
+}

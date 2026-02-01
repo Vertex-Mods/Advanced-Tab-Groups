@@ -1,0 +1,222 @@
+/* ==== Tab groups ==== */
+/* https://github.com/Anoms12/Advanced-Tab-Groups */
+/* ====== v3.4.0s ====== */
+tab-group:not([split-view-group]) {
+    --tab-group-stroke: light-dark(
+    color-mix(in srgb, var(--zen-primary-color) 60%, black),
+    color-mix(in srgb, var(--zen-colors-primary) 20%, var(--toolbox-textcolor)));
+  
+    @media not (-moz-pref("browser.tabs.groups.arc-style")) {
+      &[show-grain="true"] .grain {
+        display: flex;
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-image: url(chrome://browser/content/zen-images/grain-bg.png);
+        pointer-events: none;
+        z-index: 1;
+        opacity: var(--group-grain, 0);
+        mix-blend-mode: overlay;
+        border-radius: 4px;
+      }
+    }
+
+  .tab-group-label-container {
+    height: 36px !important;
+    margin: 0 !important;
+    padding: 0 10px 0 0 !important;
+    border-radius: var(--border-radius-medium) !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+
+    .tab-close-button {
+      display: none !important;
+    }
+
+    &:hover {
+      background-color: var(--tab-hover-background-color) !important;
+      .tab-close-button {
+        -moz-window-dragging: no-drag !important;
+        visibility: visible !important;
+        display: flex !important;
+      }
+    }
+
+    .tab-group-icon-container {
+      margin: 0 6px 0 10px;
+    }
+
+    .tab-group-icon {
+      list-style-image: none !important;
+      display: flex !important;
+      justify-content: center !important;
+      align-items: center !important;
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      position: relative;
+      fill: var(--tab-group-stroke) !important;
+      background: var(--tab-group-color);
+
+      &[zen-emoji-open='true']::before {
+        border: 1px dashed light-dark(rgba(0, 0, 0, .5), rgba(255, 255, 255, .5));
+        border-radius: 6px;
+        content: '';
+        position: absolute;
+        pointer-events: none;
+      }
+
+      .group-icon {
+        display: block;
+        width: 12px;
+        height: 12px;
+        fill: white;
+        @media (-moz-pref("browser.tabs.groups.arc-style")) {
+          width: 16px;
+          height: 16px;
+        }
+      }
+
+      & label {
+        transform: translate(-1px, -1px);
+      }
+    }
+
+    .tab-group-label {
+      direction: ltr;
+      mask-image: linear-gradient(to left, transparent, black 1em);
+      margin-right: auto !important;
+      width: 100%;
+      height: 100% !important;
+      padding: 0 4px 0 4px !important;
+      background: transparent !important;
+      color: var(--tab-selected-textcolor) !important;
+
+      &:-moz-window-inactive {
+        color: var(--toolbox-textcolor-inactive) !important;
+      }
+
+      font-weight: 400 !important;
+      text-align: start !important;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 5px;
+    }
+  }
+
+  .tab-group-container {
+    max-height: 100% !important;
+    position: relative;
+    margin-inline-start: 12px !important;
+
+    .grain, &::after {
+      position: absolute;
+      left: -2px !important;
+      top: 0;
+      height: 100%;
+      width: 2px;
+      pointer-events: none !important;
+    }
+
+    &::after {
+      content: "";
+      background: var(--tab-group-color);
+    }
+
+    tab {
+      max-height: 40px;
+      opacity: 1;
+      overflow: hidden;
+      transition: scale 0.07s ease, var(--zen-tabbox-element-indent-transition),
+        min-width 100ms ease-out, max-width 100ms ease-out, max-height 0.1s ease,
+        opacity 0.1s ease !important;
+    }
+  }
+
+  &[collapsed] {
+    .tab-group-container {
+      tab:not([selected]) {
+        max-height: 0 !important;
+        opacity: 0 !important;
+      }
+    }
+  }
+}
+
+/* Arc-like group styling */
+@media (-moz-pref("browser.tabs.groups.arc-style")) {
+  /* Hide the color context menu options */
+  #advanced-tab-groups-context-menu {
+    .change-group-color {
+      display: none !important;
+    }
+  }
+  
+  tab-group:not([split-view-group]) {
+    .tab-group-label-container {
+      height: 30px !important;
+      margin-block-start: 5px !important;
+      &:hover {
+        background-color: transparent !important;
+      }
+      
+      .tab-group-icon-container {
+        margin: 0 0 0 10px !important;
+        display: none !important;
+
+        .tab-group-icon {
+          background: none !important;
+        }
+
+        &:has(.group-icon) {
+          display: flex !important;
+        }
+      
+        &:has(.tab-group-icon[zen-emoji-open='true']) {
+          display: flex !important;
+        }
+        
+        & .group-icon {
+          width: 14px !important;
+          height: 14px !important;
+          fill: light-dark(black, white) !important;
+        }
+      }
+
+      .tab-group-label {
+        font-weight: 600 !important;
+        padding-inline: 0 var(--space-medium) !important;
+        margin-left: 10px !important;
+
+        #tabbrowser-tabs[orient="vertical"] & {
+          #tabbrowser-tabs[expanded] & {
+            margin-inline-end: var(--space-medium);
+          }
+        }
+      }
+
+      .tab-close-button {
+        display: none !important;
+      }
+    }
+
+    .tab-group-container {
+      margin-inline-start: 0 !important;
+      &::after {
+        content: none;
+      }
+    }
+
+    &[collapsed] {
+      .tab-group-container {
+        tab:not([selected]) {
+          max-height: 40px !important;
+          opacity: 100% !important;
+        }
+      }
+    }
+  }
+}

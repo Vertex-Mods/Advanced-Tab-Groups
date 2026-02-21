@@ -80,7 +80,7 @@ tab-group:not([split-view-group]) {
       }
 
       & label {
-        transform: translate(-1px, -1px);
+        transform: translate(0, -1px);
       }
     }
 
@@ -126,14 +126,6 @@ tab-group:not([split-view-group]) {
       background: var(--tab-group-color);
     }
 
-    tab {
-      max-height: 40px;
-      opacity: 1;
-      overflow: hidden;
-      transition: scale 0.07s ease, var(--zen-tabbox-element-indent-transition),
-        min-width 100ms ease-out, max-width 100ms ease-out, max-height 0.1s ease,
-        opacity 0.1s ease !important;
-    }
   }
 
   &[collapsed] {
@@ -171,7 +163,7 @@ tab-group:not([split-view-group]) {
           background: none !important;
         }
 
-        &:has(.group-icon) {
+        &:has(label, .group-icon) {
           display: flex !important;
         }
       
@@ -204,7 +196,7 @@ tab-group:not([split-view-group]) {
     }
 
     .tab-group-container {
-      margin-inline-start: 0 !important;
+      margin-inline-start: 5px !important;
       &::after {
         content: none;
       }

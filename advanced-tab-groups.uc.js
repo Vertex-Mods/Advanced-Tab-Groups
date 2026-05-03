@@ -10,12 +10,17 @@ class AdvancedTabGroups {
   #initTabGroupListener;
 
   constructor() {
-    this.init();
+    this.init().catch((error) => {
+      console.error("[AdvancedTabGroups] Initialization failed:", error);
+    });
   }
 
   async init() {
     // Wait for any dependencies before proceeding.
-    await this.waitForDependencies();
+    const dependenciesReady = await this.waitForDependencies();
+    if (!dependenciesReady) {
+      return;
+    }
 
     // Load saved tab group settings
     this.applySavedColors();
@@ -62,13 +67,13 @@ class AdvancedTabGroups {
               // Proactively remove Firefox built-in tab group editor menu if it appears
               if (
                 node.id === "tab-group-editor" ||
-                node.nodeName?.toLowerCase() === "tabgroup-meu" ||
-                node.querySelector?.("#tab-group-editor, tabgroup-meu")
+                node.nodeName?.toLowerCase() === "tabgroup-menu" ||
+                node.querySelector?.("#tab-group-editor, tabgroup-menu")
               ) {
                 this.removeBuiltinTabGroupMenu(node);
               }
               // Check if the added node is a tab-group
-              if (node.tagName === "tab-group") {
+              if (node.localName === "tab-group") {
                 // Skip split-view-groups
                 if (!node.hasAttribute("split-view-group")) {
                   this.processGroup(node);
@@ -88,7 +93,7 @@ class AdvancedTabGroups {
       });
     });
 
-    observer.observe(document.body, {
+    observer.observe(document.body || document.documentElement, {
       childList: true,
       subtree: true,
     });
@@ -109,7 +114,7 @@ class AdvancedTabGroups {
         }
       });
     
-      observer.observe(document.body, {
+      observer.observe(document.body || document.documentElement, {
         childList: true,
         subtree: true
       });
@@ -118,19 +123,30 @@ class AdvancedTabGroups {
 
   waitForDependencies() {
     return new Promise((resolve) => {
-      const id = setInterval(() => {
-        const deps = ["SessionStore", "gZenWorkspaces", "gZenThemePicker"]
-        
-        let depsExist = true;
-        for (const dep of deps) {
-          if (!window.hasOwnProperty(dep)) {
-            depsExist = false;
-          }
-        }
+      const requiredDeps = ["SessionStore", "Services", "gBrowser", "MozXULElement"];
+      const optionalDeps = ["gZenWorkspaces", "gZenThemePicker"];
+      let attempts = 0;
 
-        if (depsExist) {
+      const id = setInterval(() => {
+        const missingRequired = requiredDeps.filter(dep => !(dep in window) || !window[dep]);
+
+        if (!missingRequired.length) {
           clearInterval(id);
-          resolve();
+          const missingOptional = optionalDeps.filter(dep => !(dep in window) || !window[dep]);
+          if (missingOptional.length) {
+            console.warn(
+              "[AdvancedTabGroups] Continuing without optional Zen globals:",
+              missingOptional.join(", ")
+            );
+          }
+          resolve(true);
+        } else if (++attempts >= 200) {
+          clearInterval(id);
+          console.error(
+            "[AdvancedTabGroups] Required browser globals did not load:",
+            missingRequired.join(", ")
+          );
+          resolve(false);
         }
       }, 50);
     });
@@ -138,14 +154,22 @@ class AdvancedTabGroups {
 
   // Set up observer for workspace changes to update group visibility
   setupWorkspaceObserver() {
+    if (!window.gZenWorkspaces) {
+      console.warn("[AdvancedTabGroups] Workspace manager unavailable; skipping workspace observer");
+      return;
+    }
+
     // Override the original workspace switching method to add our visibility update
     const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
-    window.gZenWorkspaces.switchToWorkspace = (...args) => {
-      const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
-      // Update group visibility after workspace switch
-      setTimeout(() => this.updateGroupVisibility(), 100);
-      return result;
-    };
+    if (typeof originalSwitchToWorkspace === "function" && !window.gZenWorkspaces._advancedTabGroupsPatched) {
+      window.gZenWorkspaces.switchToWorkspace = (...args) => {
+        const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
+        // Update group visibility after workspace switch
+        setTimeout(() => this.updateGroupVisibility(), 100);
+        return result;
+      };
+      window.gZenWorkspaces._advancedTabGroupsPatched = true;
+    }
   
     // Also listen for workspace strip changes
     const workspaceObserver = new MutationObserver(() => {
@@ -168,7 +192,12 @@ class AdvancedTabGroups {
   updateGroupVisibility() {
     try {
       // Get all tab groups in the active workspace using DOM query (for active workspace detection)
-      const activeWorkspaceGroups = gZenWorkspaces?.activeWorkspaceStrip?.querySelectorAll("tab-group") || [];
+      const activeWorkspaceStrip = window.gZenWorkspaces?.activeWorkspaceStrip;
+      if (!activeWorkspaceStrip) {
+        return;
+      }
+
+      const activeWorkspaceGroups = activeWorkspaceStrip.querySelectorAll("tab-group");
       const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
 
       this.tabGroups.forEach(group => {
@@ -193,30 +222,16 @@ class AdvancedTabGroups {
 
   // Remove Firefox's built-in tab group editor menu elements if present
   removeBuiltinTabGroupMenu(root = document) {
-    try {
-      const list = root.querySelectorAll
-        ? root.querySelectorAll("#tab-group-editor, tabgroup-meu")
-        : [];
-      list.forEach((el) => {
-        el.remove();
-      });
-      // Fallback direct id lookup
-      const byId = root.getElementById
-        ? root.getElementById("tab-group-editor")
-        : null;
-      if (byId) {
-        byId.remove();
-      }
-    } catch (e) {
-      console.error(
-        "[AdvancedTabGroups] Error removing built-in tab group menu:",
-        e
-      );
-    }
+    // Leave the platform menu in place so other Sine mods can extend it.
+    // ATG handles its own group label context menu without deleting shared UI.
   }
 
   get tabGroups() {
-    return gBrowser.tabGroups.filter(group => group.tagName === "tab-group");
+    if (window.gBrowser?.tabGroups) {
+      return gBrowser.tabGroups.filter(group => group.localName === "tab-group" || group.tagName?.toLowerCase() === "tab-group");
+    }
+
+    return Array.from(document.querySelectorAll("tab-group"));
   }
 
   getGroupById(groupId) {
@@ -334,50 +349,55 @@ class AdvancedTabGroups {
       return;
     }
 
-    // Check if close button already exists
-    if (labelContainer.querySelector(".tab-close-button")) {
-      return;
+    let closeButton = labelContainer.querySelector(".tab-close-button");
+    if (!closeButton) {
+      const tabContainer = group.querySelector(".tab-group-container");
+      if (tabContainer && !tabContainer.querySelector(":scope > .grain")) {
+        const grain = document.createElement("div");
+        grain.className = "grain";
+        tabContainer.appendChild(grain);
+      }
+
+      // Create and inject the icon container and close button
+      const groupDomFrag = window.MozXULElement.parseXULToFragment(`
+        <div class="tab-group-icon-container">
+          <div class="tab-group-icon">
+            <div class="grain"></div>
+          </div>
+          <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
+        </div>
+        <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
+      `);
+      const iconContainer = groupDomFrag.children[0];
+      closeButton = groupDomFrag.children[1];
+
+      // Insert the icon container at the beginning of the label container
+      labelContainer.insertBefore(iconContainer, labelContainer.firstChild);
+      // Add the close button to the label container
+      labelContainer.appendChild(closeButton);
     }
 
-    const tabContainer = group.querySelector(".tab-group-container");
-    const grain = document.createElement("div");
-    grain.className = "grain";
-    tabContainer.appendChild(grain);
+    group.setAttribute("data-close-button-added", "true");
 
-    // Create and inject the icon container and close button
-    const groupDomFrag = window.MozXULElement.parseXULToFragment(`
-      <div class="tab-group-icon-container">
-        <div class="tab-group-icon">
-          <div class="grain"></div>
-        </div>
-        <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
-      </div>
-      <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
-    `);
-    const iconContainer = groupDomFrag.children[0];
-    const closeButton = groupDomFrag.children[1];
+    if (!closeButton._advancedTabGroupsClickAdded) {
+      closeButton._advancedTabGroupsClickAdded = true;
+      // Add click event listener
+      closeButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        event.preventDefault();
 
-    // Insert the icon container at the beginning of the label container
-    labelContainer.insertBefore(iconContainer, labelContainer.firstChild);
-    // Add the close button to the label container
-    labelContainer.appendChild(closeButton);
+        try {
+          // Remove the group's saved color, icon, and collapsed state before removing the group
+          this.removeSavedColor(group.id);
+          this.removeSavedIcon(group.id);
+          this.removeSavedCollapsedState(group.id);
 
-    // Add click event listener
-    closeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      event.preventDefault();
-
-      try {
-        // Remove the group's saved color, icon, and collapsed state before removing the group
-        this.removeSavedColor(group.id);
-        this.removeSavedIcon(group.id);
-        this.removeSavedCollapsedState(group.id);
-
-        gBrowser.removeTabGroup(group);
-      } catch (error) {
-        console.error("[AdvancedTabGroups] Error removing tab group:", error);
-      }
-    });
+          gBrowser.removeTabGroup(group);
+        } catch (error) {
+          console.error("[AdvancedTabGroups] Error removing tab group:", error);
+        }
+      });
+    }
 
     // Remove editor mode class if present (prevent editor mode on new group)
     group.classList.remove("tab-group-editor-mode-create");
@@ -599,16 +619,18 @@ class AdvancedTabGroups {
 
   updateIconColor(group, colors) {
     const groupIcon = group.querySelector(".group-icon");
+    if (!groupIcon || !window.gZenThemePicker || !colors?.length) {
+      return;
+    }
+
     // If the background is dark mode, we need to get the contrast of that (opposite).
     const shouldBeDarkMode = !gZenThemePicker.shouldBeDarkMode(
       typeof colors[0] === "object" ? gZenThemePicker.getMostDominantColor(colors) : colors
     );
-    if (groupIcon) {
-      if (shouldBeDarkMode) {
-        groupIcon.style.fill = "black";
-      } else {
-        groupIcon.style.fill = "white";
-      }
+    if (shouldBeDarkMode) {
+      groupIcon.style.fill = "black";
+    } else {
+      groupIcon.style.fill = "white";
     }
   }
 
@@ -661,10 +683,15 @@ class AdvancedTabGroups {
   addContextMenu(group) {
     // Prevent duplicate listener wiring per group
     if (group._contextMenuAdded) return;
-    group._contextMenuAdded = true;
 
     // Create shared menu once
     const sharedMenu = this.ensureSharedContextMenu();
+    if (!sharedMenu) {
+      console.warn("[AdvancedTabGroups] Shared context menu unavailable for group:", group.id);
+      return;
+    }
+
+    group._contextMenuAdded = true;
 
     // Attach context menu only to the label container
     const labelContainer = group.querySelector(".tab-group-label-container");
@@ -1040,6 +1067,7 @@ class AdvancedTabGroups {
                   ":",
                   error
                 );
+                processedResolve(true);
               }
             };
 
@@ -1327,6 +1355,10 @@ class AdvancedTabGroups {
       Object.entries(this.savedColors).forEach(async ([groupId, color]) => {
         // Handle new format (object with gradientColors, opacity, texture)
         if (typeof color === 'object' && color.gradientColors) {
+          if (!window.gZenThemePicker) {
+            return;
+          }
+
           const previousOpacity = gZenThemePicker.currentOpacity;
           gZenThemePicker.currentOpacity = color.opacity || 1;
 
@@ -1606,18 +1638,22 @@ class AdvancedTabGroups {
     const tabContextMenu = document.getElementById("tabContextMenu");
     if (tabContextMenu) {
       tabContextMenu.addEventListener("popupshowing", () => {
+        if (!window.gBrowser) {
+          return;
+        }
+
         // Get folders to hide
         const foldersToHide = Array.from(
-          gBrowser.tabContainer.querySelectorAll("zen-folder")
+          gBrowser.tabContainer?.querySelectorAll("zen-folder") || []
         ).map((f) => f.id);
 
         // Get groups not in active workspace to hide
-        const activeWorkspaceGroups = gZenWorkspaces?.activeWorkspaceStrip?.querySelectorAll("tab-group") || [];
+        const activeWorkspaceGroups = window.gZenWorkspaces?.activeWorkspaceStrip?.querySelectorAll("tab-group") || [];
         const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
         
         // Use gBrowser.tabGroups to find inactive groups (more efficient)
-        let inactiveGroupIds = gBrowser.tabGroups
-          .filter(g => !activeGroupIds.has(g.id) && (!g.hasAttribute || !g.hasAttribute("split-view-group")))
+        let inactiveGroupIds = (gBrowser.tabGroups || [])
+          .filter(g => activeGroupIds.size && !activeGroupIds.has(g.id) && (!g.hasAttribute || !g.hasAttribute("split-view-group")))
           .map(g => g.id);
 
         // Combine folders and inactive groups to hide

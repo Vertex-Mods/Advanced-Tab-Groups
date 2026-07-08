@@ -289,7 +289,7 @@ class AdvancedTabGroups {
     labelElement.after(input);
     // Focus after insertion
     input.focus();
-    if (selectAll) {
+    if (selectAll && input.value !== "\u200b") {
       // Select all text for manual rename
       input.select();
     } else {

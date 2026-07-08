@@ -838,11 +838,11 @@ class AdvancedTabGroups {
                 
                 const originalUpdateNoise = gZenThemePicker.updateNoise;
                 gZenThemePicker.updateNoise = () => {};
-                Object.defineProperty(obj, "toolbarBackgroundElement", {
+                Object.defineProperty(gZenThemePicker, "toolbarBackgroundElement", {
                   get() { return null; },
                   configurable: true,
                 });
-                Object.defineProperty(obj, "browserBackgroundElement", {
+                Object.defineProperty(gZenThemePicker, "browserBackgroundElement", {
                   get() { return null; },
                   configurable: true,
                 });

@@ -838,6 +838,10 @@ class AdvancedTabGroups {
                 
                 const originalUpdateNoise = gZenThemePicker.updateNoise;
                 gZenThemePicker.updateNoise = () => {};
+                const originalToolbarBgEl = gZenThemePicker.toolbarBackgroundElement;
+                const originalBrowserBgEl = gZenThemePicker.browserBackgroundElement;
+                gZenThemePicker.toolbarBackgroundElement = null;
+                gZenThemePicker.browserBackgroundElement = null;
                 const fakeWindow = {
                   document: {
                     documentElement: {
@@ -882,6 +886,8 @@ class AdvancedTabGroups {
 
                 Services.wm = originalWm;
                 gZenThemePicker.updateNoise = originalUpdateNoise;
+                gZenThemePicker.toolbarBackgroundElement = originalToolbarBgEl;
+                gZenThemePicker.browserBackgroundElement = originalBrowserBgEl;
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error applying color to group:",

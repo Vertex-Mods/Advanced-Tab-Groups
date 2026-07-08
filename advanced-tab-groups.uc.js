@@ -859,6 +859,7 @@ class AdvancedTabGroups {
                       return null;
                     },
                   },
+                  windowUtils,
                 }
 
                 const originalWm = Services.wm;

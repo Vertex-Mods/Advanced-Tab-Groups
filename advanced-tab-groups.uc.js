@@ -755,7 +755,7 @@ class AdvancedTabGroups {
     grain.className = "grain";
     tabContainer.appendChild(grain);
 
-    // Create and inject the icon container and close button
+    // Create and inject the icon container and buttons
     const groupDomFrag = window.MozXULElement.parseXULToFragment(`
       <div class="tab-group-icon-container">
         <div class="tab-group-icon">
@@ -763,15 +763,24 @@ class AdvancedTabGroups {
         </div>
         <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
       </div>
+      <image class="tab-group-folder-button" role="button" keyNav="false" tooltiptext="Create folder"/>
       <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
     `);
     const iconContainer = groupDomFrag.children[0];
-    const closeButton = groupDomFrag.children[1];
+    const folderButton = groupDomFrag.children[1];
+    const closeButton = groupDomFrag.children[2];
 
     // Insert the icon container at the beginning of the label container
     labelContainer.insertBefore(iconContainer, labelContainer.firstChild);
-    // Add the close button to the label container
+    // Add the folder and close buttons to the label container
+    labelContainer.appendChild(folderButton);
     labelContainer.appendChild(closeButton);
+
+    folderButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      try { this.convertGroupToFolder(group); } catch (e) { console.error("[AdvancedTabGroups] Error converting to folder:", e); }
+    });
 
     // Add click event listener
     closeButton.addEventListener("click", (event) => {
@@ -869,15 +878,30 @@ class AdvancedTabGroups {
     });
   }
 
+  isArcMode() {
+    try {
+      return Services.prefs.getBoolPref("browser.tabs.groups.arc-style", false) ||
+        Services.prefs.getBoolPref("tab.groups.fill-folders", false) ||
+        Services.prefs.getBoolPref("tab.groups.theme-folders", false);
+    } catch { return false; }
+  }
+
   // Set up observer to track collapsed state changes
   setupGroupCollapsedObserver(group) {
     if (group._collapsedObserverAdded) return;
     group._collapsedObserverAdded = true;
 
+    if (this.isArcMode() && group.hasAttribute("collapsed")) {
+      try { group.removeAttribute("collapsed"); } catch {}
+    }
+
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
-          // Save the collapsed state when it changes
+          if (this.isArcMode() && group.hasAttribute("collapsed")) {
+            try { group.removeAttribute("collapsed"); } catch {}
+            return;
+          }
           this.saveGroupCollapsedState(group.id, group.hasAttribute("collapsed"));
         }
       });
@@ -2179,12 +2203,14 @@ class AdvancedTabGroups {
   // Apply saved collapsed states to tab groups
   applySavedCollapsedStates() {
     try {
+      if (this.isArcMode()) return;
       const states = this.savedCollapsedStates;
       Object.entries(states).forEach(([groupId, isCollapsed]) => {
         if (isCollapsed) {
           // Use waitForElm to handle groups that might not be ready yet
           this.waitForElm(`tab-group[id="${groupId}"]`).then(group => {
             if (group && !group.hasAttribute("split-view-group")) {
+              if (this.isArcMode()) { group.removeAttribute("collapsed"); return; }
               group.setAttribute("collapsed", "true");
               console.log(`[AdvancedTabGroups] Applied collapsed state to group ${groupId}`);
             }

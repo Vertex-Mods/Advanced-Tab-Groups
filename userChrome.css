@@ -34,10 +34,36 @@ tab-group:not([split-view-group]) {
     .tab-close-button {
       display: none !important;
     }
+    .tab-group-folder-button {
+      display: none !important;
+      list-style-image: url("chrome://browser/skin/zen-icons/folder.svg") !important;
+      -moz-context-properties: fill, fill-opacity !important;
+      fill: currentColor !important;
+      width: 20px !important;
+      height: 20px !important;
+      padding: 2px !important;
+      border-radius: var(--border-radius-small, 4px) !important;
+      margin-inline: 4px 2px !important;
+    }
+    .tab-group-folder-button:hover {
+      background-color: color-mix(in srgb, currentColor 12%, transparent) !important;
+    }
+    @media not (-moz-pref("browser.tabs.groups.show-folder-button")) {
+      .tab-group-folder-button {
+        display: none !important;
+      }
+    }
 
     &:hover {
       background-color: var(--tab-hover-background-color) !important;
       .tab-close-button {
+        -moz-window-dragging: no-drag !important;
+        visibility: visible !important;
+        display: flex !important;
+      }
+    }
+    @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
+      &:hover .tab-group-folder-button {
         -moz-window-dragging: no-drag !important;
         visibility: visible !important;
         display: flex !important;
@@ -223,12 +249,26 @@ tab-group:not([split-view-group]) {
       .tab-close-button {
         display: none !important;
       }
+      .tab-group-folder-button {
+        display: none !important;
+      }
+      &:hover .tab-close-button {
+        display: flex !important;
+      }
+      @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
+        &:hover .tab-group-folder-button {
+          display: flex !important;
+        }
+      }
     }
 
     .tab-group-container {
       margin-inline-start: 5px !important;
       &::after {
         content: none;
+      }
+      tab {
+        transition: none !important;
       }
     }
 
@@ -237,8 +277,12 @@ tab-group:not([split-view-group]) {
         tab:not([selected]) {
           max-height: 40px !important;
           opacity: 100% !important;
+          transition: none !important;
         }
       }
     }
+  }
+  tab-group[collapsed] tab[aria-hidden="true"] {
+    transition: none !important;
   }
 }

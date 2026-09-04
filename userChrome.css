@@ -41,29 +41,18 @@ tab-group:not([split-view-group]) {
       fill: currentColor !important;
       width: 20px !important;
       height: 20px !important;
-      padding: 2px !important;
-      border-radius: var(--border-radius-small, 4px) !important;
-      margin-inline: 4px 2px !important;
+      padding: 4px !important;
+      border-radius: var(--tab-border-radius, var(--border-radius-small, 4px)) !important;
+      margin-inline: 0 2px !important;
+      -moz-window-dragging: no-drag !important;
     }
     .tab-group-folder-button:hover {
       background-color: color-mix(in srgb, currentColor 12%, transparent) !important;
-    }
-    @media not (-moz-pref("browser.tabs.groups.show-folder-button")) {
-      .tab-group-folder-button {
-        display: none !important;
-      }
     }
 
     &:hover {
       background-color: var(--tab-hover-background-color) !important;
       .tab-close-button {
-        -moz-window-dragging: no-drag !important;
-        visibility: visible !important;
-        display: flex !important;
-      }
-    }
-    @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
-      &:hover .tab-group-folder-button {
         -moz-window-dragging: no-drag !important;
         visibility: visible !important;
         display: flex !important;
@@ -159,11 +148,16 @@ tab-group:not([split-view-group]) {
       overflow: hidden;
       transition: scale 0.07s ease, var(--zen-tabbox-element-indent-transition), min-width 100ms ease-out, max-width 100ms ease-out, max-height 0.15s ease, opacity 0.15s ease !important;
     }
+
+    > tab-group:not([split-view-group]) {
+      margin-block: 2px 0 !important;
+    }
   }
 
   &[collapsed] {
     .tab-group-container {
-      tab:not([selected]) {
+      tab:not([selected]),
+      > tab-group:not(:has(tab[selected])) {
         max-height: 0 !important;
         min-height: 0 !important;
         opacity: 0 !important;
@@ -249,15 +243,14 @@ tab-group:not([split-view-group]) {
       .tab-close-button {
         display: none !important;
       }
-      .tab-group-folder-button {
-        display: none !important;
-      }
-      &:hover .tab-close-button {
-        display: flex !important;
-      }
+
       @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
         &:hover .tab-group-folder-button {
           display: flex !important;
+          visibility: visible !important;
+          width: 20px !important;
+          height: 20px !important;
+          padding: 4px !important;
         }
       }
     }
@@ -267,14 +260,16 @@ tab-group:not([split-view-group]) {
       &::after {
         content: none;
       }
-      tab {
+      tab,
+      > tab-group {
         transition: none !important;
       }
     }
 
     &[collapsed] {
       .tab-group-container {
-        tab:not([selected]) {
+        tab:not([selected]),
+        > tab-group:not(:has(tab[selected])) {
           max-height: 40px !important;
           opacity: 100% !important;
           transition: none !important;

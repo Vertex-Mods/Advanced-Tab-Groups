@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.6.0 ======= */
+/* ======= v3.7.0 ======= */
 
 class AdvancedTabGroups {
   #initTabGroupListener;
@@ -20,10 +20,13 @@ class AdvancedTabGroups {
     // Load saved tab group settings
     this.applySavedColors();
     this.applySavedIcons();
+    this.applySavedParents();
     this.applySavedCollapsedStates();
 
     // Set up observer for all tab groups
     this.setupObserver();
+    this.setupDragAndDropSync();
+    this.setupNativeGroupDragIntegration();
 
     // Add folder context menu item
     this.addFolderContextMenuItems();
@@ -41,6 +44,7 @@ class AdvancedTabGroups {
     setTimeout(() => this.processExistingGroups(), 1000);
 
     // Apply saved collapsed states after groups are processed
+    setTimeout(() => this.applySavedParents(), 1200);
     setTimeout(() => this.applySavedCollapsedStates(), 1500);
 
     // Listen for tab group creation events from the platform component
@@ -365,7 +369,10 @@ class AdvancedTabGroups {
         }
 
         const tabs = (group.tabs || []).filter(child => {
-          return !child.hasAttribute("cloned") && !child.hasAttribute("zen-empty-tab");
+          const closestGroup = child.closest?.("tab-group");
+          return !child.hasAttribute("cloned") &&
+            !child.hasAttribute("zen-empty-tab") &&
+            (!closestGroup || closestGroup === group);
         });
         const hasActive = tabs.some(tab => tab.selected);
         const groupColor = this.getAdvancedTabGroupsLibraryColor(group);
@@ -425,6 +432,9 @@ class AdvancedTabGroups {
           className: "library-workspace-tab-group-content"
         });
         tabs.forEach(tab => this.renderTab(tab, contentEl, wsId));
+        Array.from(group.querySelectorAll(":scope > .tab-group-container > tab-group"))
+          .filter(childGroup => !childGroup.hasAttribute("split-view-group"))
+          .forEach(childGroup => this.renderAdvancedTabGroupsGroup(childGroup, contentEl, wsId));
 
         groupEl.appendChild(contentEl);
         container.appendChild(groupEl);
@@ -627,7 +637,13 @@ class AdvancedTabGroups {
   }
 
   get tabGroups() {
-    return gBrowser.tabGroups.filter(group => group.tagName === "tab-group");
+    const groups = [
+      ...(Array.isArray(gBrowser.tabGroups) ? gBrowser.tabGroups : []),
+      ...document.querySelectorAll("tab-group"),
+    ];
+    return Array.from(new Set(groups)).filter(group =>
+      group.localName === "tab-group" || group.tagName === "tab-group"
+    );
   }
 
   getGroupById(groupId) {
@@ -744,6 +760,8 @@ class AdvancedTabGroups {
     if (!labelContainer) {
       return;
     }
+    labelContainer.classList.add("zen-drop-target");
+    this.ensureGroupContainer(group);
 
     // Check if close button already exists
     if (labelContainer.querySelector(".tab-close-button")) {
@@ -763,7 +781,7 @@ class AdvancedTabGroups {
         </div>
         <image class="group-marker" role="button" keyNav="false" tooltiptext="Toggle Group"/>
       </div>
-      <image class="tab-group-folder-button" role="button" keyNav="false" tooltiptext="Create folder"/>
+      <image class="tab-group-folder-button close-icon" role="button" keyNav="false" tooltiptext="Convert to Folder"/>
       <image class="tab-close-button close-icon" role="button" keyNav="false" tooltiptext="Close Group"/>
     `);
     const iconContainer = groupDomFrag.children[0];
@@ -791,6 +809,7 @@ class AdvancedTabGroups {
         // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedParentTree(group.id);
         this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
@@ -1022,6 +1041,614 @@ class AdvancedTabGroups {
       console.error("[AdvancedTabGroups] Error creating shared context menu:", error);
       return null;
     }
+  }
+
+  ensureGroupContainer(group) {
+    let container = group?.querySelector?.(":scope > .tab-group-container");
+    if (!container && group) {
+      container = document.createElement("div");
+      container.className = "tab-group-container";
+      group.appendChild(container);
+    }
+    if (container && !container.querySelector(":scope > .zen-tab-group-start")) {
+      const start = document.createElement("div");
+      start.className = "zen-tab-group-start";
+      container.prepend(start);
+    }
+    return container;
+  }
+
+  getRootTabContainer(group) {
+    return (
+      group?.closest?.(".zen-workspace-normal-tabs-section") ||
+      window.gZenWorkspaces?.activeWorkspaceStrip ||
+      gBrowser.tabContainer.querySelector(".zen-workspace-normal-tabs-section") ||
+      gBrowser.tabContainer
+    );
+  }
+
+  getDomParentGroup(group) {
+    const parentContainer = group?.parentElement?.closest?.("tab-group");
+    return parentContainer && parentContainer !== group ? parentContainer : null;
+  }
+
+  getSavedParentId(group) {
+    if (!group?.id) {
+      return null;
+    }
+    return (
+      group.getAttribute("data-atg-parent-id") ||
+      this.savedParents[group.id] ||
+      null
+    );
+  }
+
+  wouldCreateParentCycle(child, parent) {
+    if (!child || !parent || child === parent || child.contains(parent)) {
+      return true;
+    }
+
+    let current = parent;
+    const seen = new Set();
+    while (current && !seen.has(current.id)) {
+      if (current === child || current.id === child.id) {
+        return true;
+      }
+      seen.add(current.id);
+      current = this.getGroupById(this.getSavedParentId(current));
+    }
+    return false;
+  }
+
+  nestGroupUnder(group, parentGroup, { save = true } = {}) {
+    try {
+      if (
+        !group ||
+        !parentGroup ||
+        group.hasAttribute("split-view-group") ||
+        parentGroup.hasAttribute("split-view-group") ||
+        this.wouldCreateParentCycle(group, parentGroup)
+      ) {
+        return false;
+      }
+
+      const parentContainer = this.ensureGroupContainer(parentGroup);
+      if (!parentContainer) {
+        return false;
+      }
+
+      const periphery = parentContainer.querySelector(
+        "#tabbrowser-arrowscrollbox-periphery"
+      );
+      parentContainer.insertBefore(group, periphery || null);
+      group.setAttribute("data-atg-parent-id", parentGroup.id);
+      group.setAttribute(
+        "zen-workspace-id",
+        this.getGroupWorkspaceId(parentGroup) || this.getGroupWorkspaceId(group) || ""
+      );
+      this.processGroup(group);
+      this.processGroup(parentGroup);
+      this.syncGroupColorVars(group);
+      this.syncGroupColorVars(parentGroup);
+
+      if (save) {
+        this.syncSavedParentsFromDom();
+      }
+
+      document.querySelector("zen-library")?.update?.(true);
+      setTimeout(() => this.updateGroupVisibility(), 50);
+      return true;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error nesting group:", error);
+      return false;
+    }
+  }
+
+  unnestGroup(group, { save = true } = {}) {
+    try {
+      if (!group || group.hasAttribute("split-view-group")) {
+        return false;
+      }
+
+      const currentParent = this.getDomParentGroup(group);
+      const rootContainer = this.getRootTabContainer(currentParent || group);
+      if (!rootContainer) {
+        return false;
+      }
+
+      const periphery = rootContainer.querySelector(
+        "#tabbrowser-arrowscrollbox-periphery"
+      );
+      const insertBefore = currentParent?.nextSibling || periphery || null;
+      rootContainer.insertBefore(group, insertBefore);
+      group.removeAttribute("data-atg-parent-id");
+      this.processGroup(group);
+      this.syncGroupColorVars(group);
+
+      if (save) {
+        this.removeSavedParentTree(group.id);
+        this.syncSavedParentsFromDom();
+      }
+
+      document.querySelector("zen-library")?.update?.(true);
+      setTimeout(() => this.updateGroupVisibility(), 50);
+      return true;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error moving group to top level:", error);
+      return false;
+    }
+  }
+
+  setupDragAndDropSync() {
+    if (this._dragAndDropSyncAdded) {
+      return;
+    }
+    this._dragAndDropSyncAdded = true;
+
+    const scheduleSync = () => this.scheduleSavedParentsSync();
+    const syncEvents = [
+      "drop",
+      "TabMove",
+      "TabGroupCreate",
+      "TabGroupRemoved",
+      "FolderGrouped",
+      "FolderUngrouped",
+    ];
+
+    for (const eventName of syncEvents) {
+      document.addEventListener(eventName, scheduleSync, true);
+    }
+    document.addEventListener("dragstart", event => {
+      this.startGroupDragPreview(event);
+    }, true);
+    document.addEventListener("dragend", event => {
+      this.clearGroupDragPreview();
+      scheduleSync(event);
+    }, true);
+    document.addEventListener("drop", () => {
+      this.clearGroupDragPreview();
+    }, true);
+
+    const observer = new MutationObserver(mutations => {
+      const touchedGroupTree = mutations.some(mutation => {
+        if (mutation.type !== "childList") {
+          return false;
+        }
+        const nodes = [
+          ...mutation.addedNodes,
+          ...mutation.removedNodes,
+        ];
+        return nodes.some(node => {
+          if (node.nodeType !== Node.ELEMENT_NODE) {
+            return false;
+          }
+          return node.matches?.("tab-group, .tab-group-container") ||
+            node.querySelector?.("tab-group, .tab-group-container");
+        });
+      });
+
+      if (touchedGroupTree) {
+        this.scheduleSavedParentsSync();
+      }
+    });
+
+    observer.observe(gBrowser.tabContainer || document.body, {
+      childList: true,
+      subtree: true,
+    });
+    this._dragAndDropSyncObserver = observer;
+  }
+
+  setupNativeGroupDragIntegration() {
+    try {
+      this.ensureNativeTabGroupAccessors();
+      this.patchNativeDragAndDropElements();
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error setting up native group drag integration:", error);
+    }
+  }
+
+  ensureNativeTabGroupAccessors() {
+    const TabGroupClass = window.MozTabbrowserTabGroup ||
+      customElements.get("tab-group");
+    const proto = TabGroupClass?.prototype;
+    if (!proto) {
+      return;
+    }
+
+    if (!Object.getOwnPropertyDescriptor(proto, "groupContainer")) {
+      Object.defineProperty(proto, "groupContainer", {
+        configurable: true,
+        get() {
+          return this.querySelector(":scope > .tab-group-container");
+        }
+      });
+    }
+
+    if (!Object.getOwnPropertyDescriptor(proto, "group")) {
+      Object.defineProperty(proto, "group", {
+        configurable: true,
+        get() {
+          const parentGroup = this.parentElement?.closest?.("tab-group");
+          return parentGroup && parentGroup !== this ? parentGroup : null;
+        }
+      });
+    }
+
+    if (!Object.getOwnPropertyDescriptor(proto, "visible")) {
+      Object.defineProperty(proto, "visible", {
+        configurable: true,
+        get() {
+          let currentGroup = this;
+          while (currentGroup?.group) {
+            currentGroup = currentGroup.group;
+            if (currentGroup.collapsed || currentGroup.hasAttribute("collapsed")) {
+              return false;
+            }
+          }
+          return !this.hidden && !this.hasAttribute("hidden");
+        }
+      });
+    }
+
+    if (!Object.getOwnPropertyDescriptor(proto, "level")) {
+      Object.defineProperty(proto, "level", {
+        configurable: true,
+        get() {
+          return (this.group?.level || 0) + (this.group ? 1 : 0);
+        }
+      });
+    }
+
+    if (!Object.getOwnPropertyDescriptor(proto, "childGroupsAndTabs")) {
+      Object.defineProperty(proto, "childGroupsAndTabs", {
+        configurable: true,
+        get() {
+          return globalThis.advancedTabGroups?.getNativeGroupDragChildren(this) || [];
+        }
+      });
+    }
+  }
+
+  patchNativeDragAndDropElements() {
+    const tabContainer = gBrowser?.tabContainer;
+    if (!tabContainer || tabContainer._advancedTabGroupsNativeDragPatched) {
+      return;
+    }
+
+    const descriptor = this.findPropertyDescriptor(tabContainer, "dragAndDropElements");
+    const nativeGetter = descriptor?.get;
+    if (!nativeGetter) {
+      return;
+    }
+
+    const self = this;
+    Object.defineProperty(tabContainer, "dragAndDropElements", {
+      configurable: true,
+      get() {
+        const nativeItems = Array.from(nativeGetter.call(this) || []);
+        return self.expandNativeDragElements(nativeItems);
+      }
+    });
+    tabContainer._advancedTabGroupsNativeDragPatched = true;
+  }
+
+  findPropertyDescriptor(object, propertyName) {
+    let current = object;
+    while (current) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, propertyName);
+      if (descriptor) {
+        return descriptor;
+      }
+      current = Object.getPrototypeOf(current);
+    }
+    return null;
+  }
+
+  isManagedTabGroup(group) {
+    return !!(
+      group &&
+      group.localName === "tab-group" &&
+      !group.hasAttribute("split-view-group") &&
+      !group.classList.contains("zen-folder") &&
+      !group.hasAttribute("zen-folder")
+    );
+  }
+
+  getGroupLabelElement(group) {
+    return group?.labelElement ||
+      group?.querySelector?.(":scope > .tab-group-label-container > .tab-group-label") ||
+      null;
+  }
+
+  getNativeGroupDragChildren(group) {
+    const result = [];
+    const container = this.ensureGroupContainer(group);
+    if (!container) {
+      return result;
+    }
+
+    for (const child of Array.from(container.children)) {
+      if (
+        child.classList?.contains("zen-tab-group-start") ||
+        child.id === "tabbrowser-arrowscrollbox-periphery" ||
+        child.classList?.contains("pinned-tabs-container-separator")
+      ) {
+        continue;
+      }
+
+      if (gBrowser.isTab?.(child)) {
+        if (child.visible) {
+          result.push(child);
+        }
+      } else if (this.isManagedTabGroup(child)) {
+        const label = this.getGroupLabelElement(child);
+        if (label) {
+          try { label.visible = child.visible !== false; } catch {}
+          result.push(label);
+        }
+        result.push(...this.getNativeGroupDragChildren(child));
+      } else if (Array.isArray(child.tabs)) {
+        result.push(...child.tabs.filter(tab => tab?.visible));
+      }
+    }
+    return result;
+  }
+
+  expandNativeDragElements(nativeItems) {
+    const expanded = [];
+    const seen = new Set();
+
+    const pushUnique = item => {
+      if (!item || seen.has(item)) {
+        return;
+      }
+      seen.add(item);
+      expanded.push(item);
+    };
+
+    const pushGroup = group => {
+      if (!this.isManagedTabGroup(group)) {
+        return false;
+      }
+      const label = this.getGroupLabelElement(group);
+      if (label) {
+        try { label.visible = group.visible !== false; } catch {}
+        pushUnique(label);
+      }
+      for (const child of this.getNativeGroupDragChildren(group)) {
+        pushUnique(child);
+      }
+      return true;
+    };
+
+    for (const item of nativeItems) {
+      const group = item?.group || (item?.localName === "tab-group" ? item : null);
+      if (pushGroup(group)) {
+        continue;
+      }
+      pushUnique(item);
+    }
+
+    expanded.forEach((item, index) => {
+      try { item.elementIndex = index; } catch {}
+    });
+    return expanded;
+  }
+
+  scheduleSavedParentsSync() {
+    if (this._parentsSyncTimer) {
+      clearTimeout(this._parentsSyncTimer);
+    }
+    this._parentsSyncTimer = setTimeout(() => {
+      this._parentsSyncTimer = null;
+      this.syncSavedParentsFromDom();
+    }, 150);
+  }
+
+  syncSavedParentsFromDom() {
+    try {
+      const parents = {};
+      for (const group of this.tabGroups) {
+        if (
+          !group.id ||
+          group.hasAttribute("split-view-group") ||
+          group.classList.contains("zen-folder") ||
+          group.hasAttribute("zen-folder")
+        ) {
+          continue;
+        }
+
+        this.ensureGroupContainer(group);
+        const parentGroup = this.getDomParentGroup(group);
+        if (
+          parentGroup &&
+          parentGroup.id &&
+          !parentGroup.hasAttribute("split-view-group") &&
+          !this.wouldCreateParentCycle(group, parentGroup)
+        ) {
+          parents[group.id] = parentGroup.id;
+          group.setAttribute("data-atg-parent-id", parentGroup.id);
+        } else {
+          group.removeAttribute("data-atg-parent-id");
+        }
+      }
+
+      this.savedParents = parents;
+      document.querySelector("zen-library")?.update?.(true);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error syncing group hierarchy after drag/drop:", error);
+    }
+  }
+
+  getDragPreviewTargetGroup(event) {
+    const labelTarget = event.target?.closest?.(
+      ".tab-group-label, .tab-group-label-container"
+    );
+    const group = labelTarget?.closest?.("tab-group");
+    if (
+      !group ||
+      group.hasAttribute("split-view-group") ||
+      group.classList.contains("zen-folder") ||
+      group.hasAttribute("zen-folder")
+    ) {
+      return null;
+    }
+    return group;
+  }
+
+  getGroupDragPreviewColors(group) {
+    const labelContainer = group.querySelector(".tab-group-label-container");
+    const label = group.querySelector(".tab-group-label");
+    const labelStyle = label ? getComputedStyle(label) : null;
+    const labelContainerStyle = labelContainer ? getComputedStyle(labelContainer) : null;
+    const rootStyle = getComputedStyle(document.documentElement);
+    const groupColor = this.getGroupColorValue(group);
+    const groupStroke = this.getGroupStrokeValue(group);
+    const containerBg = labelContainerStyle?.backgroundColor || "";
+    const isTransparentBg = !containerBg ||
+      containerBg === "transparent" ||
+      /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/i.test(containerBg);
+    const rootBg = rootStyle.getPropertyValue("--zen-main-browser-background").trim() ||
+      rootStyle.getPropertyValue("--toolbar-bgcolor").trim() ||
+      rootStyle.backgroundColor ||
+      "Canvas";
+
+    return {
+      textColor:
+        labelStyle?.color ||
+        rootStyle.getPropertyValue("--tab-selected-textcolor").trim() ||
+        rootStyle.getPropertyValue("--toolbox-textcolor").trim() ||
+        "currentColor",
+      background:
+        isTransparentBg ? `color-mix(in srgb, ${rootBg} 92%, transparent)` : containerBg,
+      borderColor:
+        rootStyle.getPropertyValue("--zen-colors-border").trim() ||
+        "color-mix(in srgb, currentColor 16%, transparent)",
+      groupColor,
+      groupStroke,
+    };
+  }
+
+  createGroupDragImageGroup(group) {
+    const clone = group.cloneNode(true);
+    clone.setAttribute("drag-image", "true");
+    clone.removeAttribute("id");
+    clone.querySelectorAll("[id]").forEach(el => el.removeAttribute("id"));
+    clone.querySelector(".tab-group-container")?.remove();
+    clone.querySelector(".tab-group-overflow-count-container")?.remove();
+
+    const labelContainer = clone.querySelector(".tab-group-label-container");
+    if (labelContainer) {
+      labelContainer.classList.add("advanced-tab-groups-drag-preview-label");
+      labelContainer.style.cssText += [
+        "width:100%",
+        "height:34px",
+        "margin:0!important",
+        "padding:0 10px 0 0!important",
+        "border-radius:8px!important",
+        "display:flex!important",
+        "align-items:center!important",
+        "overflow:hidden!important",
+      ].join(";");
+    }
+
+    return clone;
+  }
+
+  createGroupDragPreview(group) {
+    this.syncGroupColorVars(group);
+    const colors = this.getGroupDragPreviewColors(group);
+
+    const preview = this.createGroupDragImageGroup(group);
+    preview.className = "advanced-tab-groups-drag-preview";
+    preview.setAttribute("drag-image", "true");
+    preview.style.cssText = [
+      "position:fixed",
+      "left:0",
+      "top:0",
+      "z-index:2147483647",
+      "height:34px",
+      "width:260px",
+      "max-width:260px",
+      "box-sizing:border-box",
+      "display:flex",
+      "flex-direction:column",
+      "border-radius:8px",
+      `background:${colors.background}`,
+      `border:1px solid ${colors.borderColor}`,
+      "box-shadow:0 8px 22px rgba(0,0,0,.24)",
+      `color:${colors.textColor}`,
+      "font:menu",
+      "font-size:12px",
+      "font-weight:500",
+      "line-height:1",
+      "pointer-events:none",
+      "-moz-window-dragging:no-drag",
+    ].join(";");
+
+    document.documentElement.appendChild(preview);
+    return preview;
+  }
+
+  getGroupDragPreviewOffset(event, group, preview) {
+    const targetRect =
+      event.target?.closest?.(".tab-group-label-container")?.getBoundingClientRect?.() ||
+      group.querySelector(".tab-group-label-container")?.getBoundingClientRect?.();
+    const previewRect = preview.getBoundingClientRect();
+    if (!targetRect || !previewRect.width || !previewRect.height) {
+      return { x: 14, y: 17 };
+    }
+
+    return {
+      x: Math.max(10, Math.min(previewRect.width - 10, event.clientX - targetRect.left)),
+      y: Math.max(8, Math.min(previewRect.height - 8, event.clientY - targetRect.top)),
+    };
+  }
+
+  startGroupDragPreview(event) {
+    try {
+      const group = this.getDragPreviewTargetGroup(event);
+      if (!group) {
+        return;
+      }
+
+      group.setAttribute("atg-drag-preview-active", "true");
+      group.querySelector(".tab-group-label")?.setAttribute("dragtarget", "true");
+      group.querySelector(".tab-group-label-container")?.setAttribute("dragtarget", "true");
+
+      this.clearGroupDragPreview();
+      const preview = this.createGroupDragPreview(group);
+      this._groupDragPreview = preview;
+      this._groupDragPreviewSource = group;
+      const dataTransfer = event.dataTransfer;
+      if (!dataTransfer?.setDragImage) {
+        return;
+      }
+      const offset = this.getGroupDragPreviewOffset(event, group, preview);
+      preview.style.left = `${Math.max(0, event.clientX - offset.x)}px`;
+      preview.style.top = `${Math.max(0, event.clientY - offset.y)}px`;
+      dataTransfer.setDragImage(preview, offset.x, offset.y);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error creating group drag preview:", error);
+    }
+  }
+
+  clearGroupDragPreview() {
+    try {
+      this._groupDragPreview?.remove?.();
+    } catch (_) {}
+    try {
+      this._groupDragPreviewSource?.removeAttribute?.("atg-drag-preview-active");
+      this._groupDragPreviewSource
+        ?.querySelector?.(".tab-group-label")
+        ?.removeAttribute?.("dragtarget");
+      this._groupDragPreviewSource
+        ?.querySelector?.(".tab-group-label-container")
+        ?.removeAttribute?.("dragtarget");
+    } catch (_) {}
+    this._groupDragPreview = null;
+    this._groupDragPreviewSource = null;
   }
 
   getWorkspaces(includeSynced = false) {
@@ -1303,6 +1930,7 @@ class AdvancedTabGroups {
         // Remove the group's saved color, icon, and collapsed state before removing the group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedParent(group.id);
         this.removeSavedCollapsedState(group.id);
 
         gBrowser.removeTabGroup(group);
@@ -1729,6 +2357,7 @@ class AdvancedTabGroups {
       }
       this.removeSavedColor(group.id);
       this.removeSavedIcon(group.id);
+      this.removeSavedParentTree(group.id);
       this.removeSavedCollapsedState(group.id);
     } catch (error) {
       console.error("[AdvancedTabGroups] Error ungrouping tabs:", error);
@@ -1781,6 +2410,7 @@ class AdvancedTabGroups {
         // Remove the saved color, icon, and collapsed state for the original group
         this.removeSavedColor(group.id);
         this.removeSavedIcon(group.id);
+        this.removeSavedParentTree(group.id);
         this.removeSavedCollapsedState(group.id);
 
         
@@ -2077,6 +2707,130 @@ class AdvancedTabGroups {
     }
   }
 
+  get savedParents() {
+    const parents = SessionStore.getCustomWindowValue(window, "tabGroupParents");
+    console.log("[AdvancedTabGroups] Retrieved parent hierarchy from SessionStore:", parents);
+    if (parents && parents !== "") {
+      try {
+        const parsed = JSON.parse(parents);
+        console.log("[AdvancedTabGroups] Parsed parent hierarchy:", parsed);
+        return parsed;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error parsing saved parent hierarchy:", error);
+        return {};
+      }
+    }
+    return {};
+  }
+
+  set savedParents(value) {
+    try {
+      console.log("[AdvancedTabGroups] Saving parent hierarchy to SessionStore:", value);
+      SessionStore.setCustomWindowValue(window, "tabGroupParents", JSON.stringify(value));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving parent hierarchy:", error);
+    }
+  }
+
+  saveGroupParent(groupId, parentId) {
+    try {
+      const parents = this.savedParents;
+      if (parentId) {
+        parents[groupId] = parentId;
+      } else {
+        delete parents[groupId];
+      }
+      this.savedParents = parents;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error saving group parent:", error);
+    }
+  }
+
+  removeSavedParent(groupId) {
+    try {
+      const parents = this.savedParents;
+      delete parents[groupId];
+      this.savedParents = parents;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing saved group parent:", error);
+    }
+  }
+
+  removeSavedParentTree(groupId) {
+    try {
+      const parents = this.savedParents;
+      const removeIds = new Set([groupId]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        Object.entries(parents).forEach(([childId, parentId]) => {
+          if (removeIds.has(parentId) && !removeIds.has(childId)) {
+            removeIds.add(childId);
+            changed = true;
+          }
+        });
+      }
+      removeIds.forEach(id => {
+        delete parents[id];
+      });
+      this.savedParents = parents;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing saved group parent tree:", error);
+    }
+  }
+
+  removeSavedChildParentLinks(groupId) {
+    try {
+      const parents = this.savedParents;
+      Object.entries(parents).forEach(([childId, parentId]) => {
+        if (parentId === groupId) {
+          delete parents[childId];
+        }
+      });
+      this.savedParents = parents;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing saved child parent links:", error);
+    }
+  }
+
+  applySavedParents() {
+    try {
+      const parents = this.savedParents;
+      const entries = Object.entries(parents).filter(([groupId, parentId]) => {
+        return groupId && parentId && groupId !== parentId;
+      });
+      if (!entries.length) {
+        return;
+      }
+
+      const depthFor = (groupId, seen = new Set()) => {
+        const parentId = parents[groupId];
+        if (!parentId || seen.has(groupId)) {
+          return 0;
+        }
+        seen.add(groupId);
+        return 1 + depthFor(parentId, seen);
+      };
+
+      entries.sort(([a], [b]) => depthFor(a) - depthFor(b));
+
+      for (const [groupId, parentId] of entries) {
+        const group = this.getGroupById(groupId);
+        const parentGroup = this.getGroupById(parentId);
+        if (
+          group &&
+          parentGroup &&
+          !group.hasAttribute("split-view-group") &&
+          !parentGroup.hasAttribute("split-view-group")
+        ) {
+          this.nestGroupUnder(group, parentGroup, { save: false });
+        }
+      }
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error applying saved group hierarchy:", error);
+    }
+  }
+
   get savedIcons() {
     const icons = SessionStore.getCustomWindowValue(window, "tabGroupIcons");
     console.log("[AdvancedTabGroups] Retrieved icons from SessionStore:", icons);
@@ -2151,6 +2905,7 @@ class AdvancedTabGroups {
       // Remove the icon from persistent storage
       this.removeSavedIcon(group.id);
     }
+
   }
 
   // Apply saved icons to tab groups
@@ -2295,6 +3050,7 @@ class AdvancedTabGroups {
             return globalThis.advancedTabGroups.tabGroups.map(g => ({
               id: g.id,
               label: g.label,
+              parentId: globalThis.advancedTabGroups.getSavedParentId(g),
               collapsed: g.hasAttribute("collapsed"),
               hasContextMenu: !!g._contextMenuAdded,
               hasColorFunction: typeof g._useFaviconColor === "function"
@@ -2303,6 +3059,7 @@ class AdvancedTabGroups {
           getSavedStates: () => ({
             colors: globalThis.advancedTabGroups.savedColors,
             icons: globalThis.advancedTabGroups.savedIcons,
+            parents: globalThis.advancedTabGroups.savedParents,
             collapsedStates: globalThis.advancedTabGroups.savedCollapsedStates
           })
         };
@@ -2329,8 +3086,8 @@ class AdvancedTabGroups {
         const activeWorkspaceGroups = gZenWorkspaces?.activeWorkspaceStrip?.querySelectorAll("tab-group") || [];
         const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
         
-        // Use gBrowser.tabGroups to find inactive groups (more efficient)
-        let inactiveGroupIds = gBrowser.tabGroups
+        // Use ATG's DOM-aware getter so nested groups are included.
+        let inactiveGroupIds = globalThis.advancedTabGroups.tabGroups
           .filter(g => !activeGroupIds.has(g.id) && (!g.hasAttribute || !g.hasAttribute("split-view-group")))
           .map(g => g.id);
 

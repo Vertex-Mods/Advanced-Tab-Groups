@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.1 - 2026-09-04
+
+- Fixed Move to Space keeping the moved tabs inside their Advanced Tab Group.
+
 ## 3.6.0 - 2026-08-24
 
 - Added Zen Library Spaces rendering for Advanced Tab Groups so tab groups no longer appear as folders.

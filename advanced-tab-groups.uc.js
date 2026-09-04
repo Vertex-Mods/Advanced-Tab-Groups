@@ -1053,6 +1053,25 @@ class AdvancedTabGroups {
     );
   }
 
+  restoreGroupTabsAfterWorkspaceMove(group, tabs) {
+    const tabContainer = group?.querySelector?.(".tab-group-container");
+    if (!group || !tabContainer || !Array.isArray(tabs)) {
+      return;
+    }
+
+    const periphery =
+      tabContainer.querySelector("#tabbrowser-arrowscrollbox-periphery") ||
+      null;
+
+    for (const tab of tabs) {
+      if (!gBrowser.isTab(tab)) {
+        continue;
+      }
+
+      tabContainer.insertBefore(tab, periphery);
+    }
+  }
+
   populateMoveGroupToSpaceMenu(popup) {
     while (popup.firstChild) {
       popup.firstChild.remove();
@@ -1111,6 +1130,8 @@ class AdvancedTabGroups {
         );
         targetContainer.insertBefore(group, periphery || null);
       }
+      this.restoreGroupTabsAfterWorkspaceMove(group, tabs);
+      this.processGroup(group);
 
       if (targetWorkspace && tabs.some(tab => tab.selected)) {
         window.gZenWorkspaces.lastSelectedWorkspaceTabs[workspaceId] =

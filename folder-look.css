@@ -23,8 +23,16 @@
     overflow: visible !important;
   }
 
-  /* #tabbrowser-tabs prefix only raises specificity above ATG's own !important rules */
-  #tabbrowser-tabs tab-group[atg-folder-look] {
+  /* ATG's colour swatch / marker and hover buttons are not part of the folder look. The id prefix keeps
+     this above ATG's own (0,4,1) hover/arc-style rules that show them; zia never sets their display. */
+  #tabbrowser-tabs tab-group[atg-folder-look] > .tab-group-label-container > :is(.tab-group-icon-container, .tab-close-button, .tab-group-folder-button) {
+    display: none !important;
+  }
+
+  /* Specificity contract: (0,3,x) header rules sit above ATG's tab-group:not(...) .x rules (0,2,1) and
+     below zia's :root[zen-sidebar-expanded] :is(zen-folder, tab-group…) rules (0,4,x), so zia's folder
+     card wins without relying on Sine's @import order. Never add an id or a second :root here. */
+  tab-group[atg-folder-look]:not([split-view-group]) {
     /* Zen's folder formulas with the group's own colour in place of --zen-primary-color.
        Must be computed here: the label container resets --tab-group-color to transparent. */
     /* Prefer the native colour code (--tab-group-background-color, untouched by ATG's favicon sync)
@@ -49,7 +57,8 @@
       background-color: transparent !important;
       border-radius: 0 !important;
 
-      :root[zen-sidebar-expanded="true"] & {
+      /* :where keeps this at (0,3,1); a bare :root[…] would outrank zia's padding-inline-end */
+      :where(:root[zen-sidebar-expanded="true"]) & {
         padding-inline-end: calc(var(--tab-group-label-padding) * 2) !important;
       }
 
@@ -57,11 +66,9 @@
         width: var(--tab-min-width) !important;
       }
 
-      /* ATG's colour swatch / marker and hover buttons are not part of the folder look */
-      & > .tab-group-icon-container,
-      & > .tab-close-button,
-      & > .tab-group-folder-button {
-        display: none !important;
+      /* ATG's own :hover rule ties at (0,3,1) and comes later in the sheet */
+      &:hover {
+        background-color: transparent !important;
       }
 
       /* Zen's hover pill lives on ::before, not the container itself */
@@ -91,7 +98,8 @@
         width: 100% !important;
       }
 
-      & > label.tab-group-label {
+      /* Plain `label` keeps this at (0,3,2), under zia's colour/weight rule; it is the only label child */
+      & > label {
         border: none !important;
         color: var(--toolbar-color) !important;
         margin: 0 !important;

@@ -21,6 +21,28 @@
     return customElements.get("zen-folder")?.rawIcon ?? null;
   }
 
+  // ---- Custom icons ----
+  // ATG keeps its icon (image.group-icon for an svg, a label for an emoji) in the hidden .tab-group-icon
+  // slot; mirror it into the cloned svg's <image> so it renders where a zen-folder shows its user icon.
+  // Emoji are wrapped the way Zen's emoji picker does with emojiAsSVG (ZenEmojiPicker.mjs).
+  function emojiSvg(text) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="28" font-size="28" x="0">${text}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+  }
+
+  function iconHref(source) {
+    if (!source) return "";
+    if (source.localName === "label") return source.textContent ? emojiSvg(source.textContent) : "";
+    return source.getAttribute("src") || "";
+  }
+
+  function syncIcon(svg, source) {
+    const image = svg?.querySelector(".icon image");
+    if (!image) return;
+    const href = iconHref(source);
+    if (image.getAttribute("href") !== href) image.setAttribute("href", href);
+  }
+
   // ---- Active tabs (Zen folder semantics) ----
   // A collapsed group keeps showing the tabs that were selected when it collapsed or got selected
   // while collapsed, until they are unloaded or the group expands; nested groups holding one stay
@@ -84,6 +106,11 @@
     }
 
     group.setAttribute(ATTR, "true");
+    // applyGroupIcon inserts/removes the slot's child, which the structural observer turns into a refresh
+    syncIcon(
+      label.querySelector(":scope > .tab-group-folder-icon > svg"),
+      label.querySelector(":scope > .tab-group-icon-container .tab-group-icon > :is(.group-icon, label)")
+    );
     updateState(group);
   }
 
@@ -125,6 +152,11 @@
         header.prepend(holder);
       }
       wrapper.setAttribute(ATTR, "true");
+      // ATG clones the sidebar icon into the header (createAdvancedTabGroupsIconNode)
+      syncIcon(
+        header.querySelector(":scope > .tab-group-folder-icon > svg"),
+        header.querySelector(".atg-tab-group-icon > :is(.group-icon, label)")
+      );
       // Rows for active tabs, and nested headers holding one, stay visible under a collapsed group
       for (const row of wrapper.querySelectorAll(".library-workspace-item:not(.atg-tab-group)")) {
         row.classList.toggle(ACTIVE_ATTR, !!row._libraryDropItem?.hasAttribute?.(ACTIVE_ATTR));

@@ -249,12 +249,12 @@
     if (libraryRaf !== null) cancelAnimationFrame(libraryRaf);
     rafId = libraryRaf = null;
 
-    // Strip everything we added so the groups fall back to ATG's own header
+    // Strip only our holders: native zen-folders share the class and Zen never rebuilds their icon once it is gone
     const shadow = document.querySelector("zen-library")?.shadowRoot;
     shadow?.getElementById(LIBRARY_STYLE_ID)?.remove();
     const roots = [gBrowser.tabContainer, shadow].filter(Boolean);
     for (const root of roots) {
-      for (const el of root.querySelectorAll(".tab-group-folder-icon")) el.remove();
+      for (const el of root.querySelectorAll(`[${ATTR}] > :is(.tab-group-label-container, .library-workspace-item.atg-tab-group) > .tab-group-folder-icon`)) el.remove();
       for (const el of root.querySelectorAll(`[${ATTR}]`)) el.removeAttribute(ATTR);
       for (const el of root.querySelectorAll(`[${ACTIVE_ATTR}]`)) el.removeAttribute(ACTIVE_ATTR);
       for (const el of root.querySelectorAll(`.${ACTIVE_ATTR}`)) el.classList.remove(ACTIVE_ATTR);

@@ -2157,6 +2157,15 @@ class AdvancedTabGroups {
     }
   }
 
+  // Zen's folder collapse leaves opacity/height inline on hidden rows and only clears them while the tab is in the folder
+  clearFolderRowStyles(tab) {
+    tab.getAnimations().forEach((animation) => animation.cancel());
+    for (const prop of ["opacity", "height", "min-height", "margin-top", "--zen-folder-indent"]) {
+      tab.style.removeProperty(prop);
+    }
+    tab.removeAttribute("folder-active");
+  }
+
   convertFolderToGroup(folder) {
     try {
       const tabsToGroup = folder.allItemsRecursive.filter(
@@ -2197,6 +2206,7 @@ class AdvancedTabGroups {
           unpinnedTabsContainer.prepend(newGroup);
 
           newGroup.addTabs(tabsToGroup);
+          tabsToGroup.forEach((tab) => this.clearFolderRowStyles(tab));
           // Colour saved by convertGroupToFolder, before processGroup defaults it to favicon mode
           this.restoreGroupColor(newGroup, folder._atgColorMemo);
 

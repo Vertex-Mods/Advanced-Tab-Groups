@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.9.0 - 2026-10-20 - searchable icons + custom icons (fixes #156)
+
+- Change Icon now opens a searchable picker: Zen SVG icons filter as you type (native search only covers emojis), plus a searchable Tabler tab — zia-extended-icons' tab when that mod is installed, otherwise ATG's bundled Tabler set (icons/ in this mod, no extra mod needed).
+- Added an icon-only Upload button pinned far-left of the picker header (mirrors the trash/delete button pinned far-right: Zen's share glyph, same hover; button box copied from the trash button at runtime so both match on any Zen version; Zen's empty spacer hidden while it shows). Uploads a local image (downscaled to 96px, stored on-device) and applies even if the OS file dialog dismisses the picker first.
+- Added a Remove Icon context menu item; cancelling the picker keeps the existing icon, while trash/none clears it.
+- Uploaded SVGs are normalized to context-fill/context-stroke on import (parsed with DOMParser; gradients and none paints preserved) and rendered with the baked icon paint (exact CSS stroke color, contrast fallback for gradients), so custom SVGs match built-in icons on every build. SVGs stored before normalization migrate on restore. Raster uploads render un-tinted.
+
 ## 3.8.0 - 2026-09-10
 
 - Removed ATG's custom group drag ghost so Zen's native drag image owns setDragImage (fixes wrong size/offset ghost).

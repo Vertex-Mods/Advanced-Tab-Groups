@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.8.0 ======= */
+/* ======= v3.9.0 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -46,6 +46,10 @@ class AdvancedTabGroups {
 
     // Remove built-in tab group editor menus if they exist
     this.removeBuiltinTabGroupMenu();
+
+    // Searchable icon picker (Zen + Tabler via zia-extended-icons when
+    // present) with custom upload support (fixes #156).
+    this.setupIconPickerIntegration();
 
     // Process existing groups
     this.processExistingGroups();
@@ -562,6 +566,1034 @@ class AdvancedTabGroups {
     }
   }
 
+  // ---- Icon picker integration (issue #156) ----
+  // Searchable icons + custom icons for tab groups.
+  // Deliberately does NOT wrap window.gZenEmojiPicker.open: wrapping races
+  // with the custom icon picker mod (zia-extended-icons, which wraps open()
+  // itself) and breaks icon setting. Instead each ATG pick owns a small
+  // completion closure fed by an onSelect capture on our own open() call —
+  // which both native and zia implementations invoke synchronously at pick
+  // time — immune to promise race ordering between wrappers.
+  // When zia-extended-icons is installed its Tabler tab is reused (ours is
+  // skipped); otherwise ATG's bundled Tabler tab (icons/ in this mod)
+  // provides the same searchable set with no extra mod required.
+  setupIconPickerIntegration() {
+    if (this._iconPickerIntegrated) {
+      return;
+    }
+    this._iconPickerIntegrated = true;
+    const tryInstall = () => {
+      try {
+        const picker = window.gZenEmojiPicker;
+        const panel = document.getElementById("PanelUI-zen-emojis-picker");
+        if (!picker || !panel || typeof picker.open !== "function") {
+          setTimeout(tryInstall, 400);
+          return;
+        }
+        this.enhanceEmojiPickerPanel(panel);
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error setting up icon picker:", error);
+      }
+    };
+    tryInstall();
+  }
+
+  // Per-pick flow. Never wraps or replaces picker.open: we call through
+  // (native or zia-wrapped) and capture the value via onSelect, which both
+  // implementations invoke synchronously at pick time — immune to promise
+  // race ordering between wrappers.
+  // Returns { value, explicit }: explicit picks (icon, Tabler, upload,
+  // trash/none) vs dismissals (ESC/click-away, keep existing icon).
+  openAtgIconPicker(anchor) {
+    const picker = window.gZenEmojiPicker;
+    const panel = document.getElementById("PanelUI-zen-emojis-picker");
+    return new Promise(resolve => {
+      let settled = false;
+      let sawSelect = false;
+      const finish = (value, explicit) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          panel?.removeEventListener("popuphidden", onHidden);
+        } catch (_) {}
+        if (this._activeIconPickDone === done) {
+          this._activeIconPickDone = null;
+          // Keep _activeIconPickGroup: the OS file dialog can settle this
+          // session before the upload finishes; the fallback below still
+          // needs the group. It is overwritten on the next pick.
+        }
+        this.setAtgPickerUiVisible(false);
+        resolve({ value: value ?? null, explicit: Boolean(explicit) });
+      };
+      const done = (value, explicit) => finish(value, explicit);
+      // Our own UI (bundled Tabler tab, header upload button) completes
+      // through this; it hides the panel first so native/zia also settle
+      // (their late settlements are ignored via `settled`).
+      this._activeIconPickDone = done;
+      try {
+        this._activeIconPickGroup = anchor?.closest?.("tab-group") || null;
+      } catch (_) {
+        this._activeIconPickGroup = null;
+      }
+      this.setAtgPickerUiVisible(true);
+      const onHidden = () => {
+        // Dismissed without picking (or after our own pick already
+        // settled): keep the existing icon.
+        finish(null, sawSelect);
+      };
+      try {
+        panel?.addEventListener("popuphidden", onHidden, { once: true });
+      } catch (_) {}
+      let nativeResult = null;
+      try {
+        nativeResult = picker.open(anchor, {
+          onlySvgIcons: !Services.prefs.getBoolPref("browser.tabs.groups.allow-emojis", false),
+          onSelect: value => {
+            sawSelect = true;
+            done(value, true);
+          },
+        });
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error opening icon picker:", error);
+        nativeResult = null;
+      }
+      Promise.resolve(nativeResult).then(
+        value => {
+          // Resolved picks already settled via onSelect; dismissal here
+          // (null without onSelect) means keep.
+          finish(value, sawSelect);
+        },
+        () => {
+          // Native rejects on dismiss-without-selection: keep icon.
+          finish(null, false);
+        }
+      );
+    });
+  }
+
+  // Called by ATG's own picker UI (Tabler tab, header upload button).
+  completeActiveIconPick(value) {
+    const done = this._activeIconPickDone;
+    if (typeof done !== "function") {
+      return false;
+    }
+    try {
+      document.getElementById("PanelUI-zen-emojis-picker")?.hidePopup();
+    } catch (_) {}
+    done(value, true);
+    return true;
+  }
+
+  // ATG's header upload only applies to group icon picks; hide it for
+  // folder/space flows using the shared panel. While it is shown, also hide
+  // Zen's native empty spacer button so no fake button sits between upload
+  // and the Emojis tab (restored afterwards only if we hid it).
+  setAtgPickerUiVisible(visible) {
+    try {
+      const upload = document.getElementById("atg-custom-icon-header-upload");
+      if (upload) {
+        upload.hidden = !visible;
+      }
+      const spacer = this._atgPickerSpacer;
+      if (spacer && spacer.isConnected) {
+        if (visible) {
+          this._atgSpacerHiddenByUs = !spacer.hidden;
+          spacer.hidden = true;
+        } else if (this._atgSpacerHiddenByUs) {
+          spacer.hidden = false;
+          this._atgSpacerHiddenByUs = false;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Inject ATG's picker UI: an upload button top-left of the picker header
+  // (parallel to the trash/delete button top-right) and — when
+  // zia-extended-icons is absent — a bundled searchable Tabler tab
+  // (icons/ in this mod) so Tabler needs no extra mod.
+  enhanceEmojiPickerPanel(panel) {
+    if (panel.__atgPickerUiAdded) {
+      return;
+    }
+    panel.__atgPickerUiAdded = true;
+    try {
+      this.addHeaderUploadButton(panel);
+      // Bundled Tabler only when zia-extended-icons isn't providing its own.
+      if (this.atgTablerAvailable()) {
+        this.setupAtgTablerPack();
+        this.addAtgTablerTab(panel);
+      }
+      // The Tabler tab lives in the shared tab strip, so gate it per open:
+      // visible for ATG group picks, hidden for folder/space flows.
+      panel.addEventListener("popupshowing", () => {
+        try {
+          const active = typeof this._activeIconPickDone === "function";
+          for (const id of ["atg-tabler-tab", "atg-tabler-page"]) {
+            const el = document.getElementById(id);
+            if (el) {
+              el.hidden = !active;
+            }
+          }
+        } catch (_) {}
+        this.syncUploadButtonGeometry();
+      });
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error adding picker UI:", error);
+    }
+    this.addZenSvgSearchFallback(panel);
+  }
+
+  // Upload trigger pinned to the far left of the picker header, mirroring
+  // the trash/delete button (#PanelUI-zen-emojis-picker-none) pinned to the
+  // far right (the header uses space-between, so true first/last children
+  // stay on the edges, never drifting center). Zen disables pointer events
+  // on the header's first toolbarbutton, so the CSS re-enables them for ours.
+  // Icon-only 22px toolbarbutton with Zen's share glyph. Only visible during
+  // ATG group icon picks.
+  addHeaderUploadButton(panel) {
+    try {
+      const header = document.getElementById("PanelUI-zen-picker-header");
+      if (!header || document.getElementById("atg-custom-icon-header-upload")) {
+        return;
+      }
+      // Zen's native empty spacer (id-less toolbarbutton, pointer-events:
+      // none) would otherwise render as a fake button between upload and
+      // the Emojis tab now that upload is first. Tracked so visibility
+      // gating can hide it while our upload is shown.
+      if (!this._atgPickerSpacer?.isConnected) {
+        this._atgPickerSpacer =
+          header.querySelector(":scope > toolbarbutton:not([id])") || null;
+      }
+      const upload = document.createXULElement("toolbarbutton");
+      upload.id = "atg-custom-icon-header-upload";
+      upload.className = "toolbarbutton-1";
+      upload.setAttribute("tooltiptext", "Upload custom icon");
+      upload.hidden = true;
+      upload.addEventListener("command", async event => {
+        event.stopPropagation();
+        const dataUrl = await this.promptCustomIconFile();
+        if (!dataUrl) {
+          return;
+        }
+        // The OS file dialog can hide the panel, settling the pick session
+        // first — then apply directly to the pending group instead.
+        if (!this.completeActiveIconPick(dataUrl)) {
+          this.applyPickedIconToGroup(dataUrl);
+        }
+      });
+      if (header.firstElementChild) {
+        header.insertBefore(upload, header.firstElementChild);
+      } else {
+        header.appendChild(upload);
+      }
+      this.syncUploadButtonGeometry();
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error adding header upload button:", error);
+    }
+  }
+
+  // Copy the trash/delete button's computed box onto the upload button so
+  // both match exactly on any Zen version, even if Zen's picker CSS drifts
+  // from the values hardcoded in userChrome.css. Runs on every popupshowing
+  // (stylesheet values compute even while hidden).
+  syncUploadButtonGeometry() {
+    try {
+      const upload = document.getElementById("atg-custom-icon-header-upload");
+      const trash = document.getElementById("PanelUI-zen-emojis-picker-none");
+      if (!upload || !trash) {
+        return;
+      }
+      const cs = window.getComputedStyle(trash);
+      for (const prop of ["width", "height"]) {
+        const value = parseFloat(cs.getPropertyValue(prop));
+        if (Number.isFinite(value) && value > 0) {
+          upload.style.setProperty(prop, `${value}px`, "important");
+        }
+      }
+      const appearance = (cs.getPropertyValue("appearance") || "").trim();
+      if (appearance) {
+        upload.style.setProperty("appearance", appearance, "important");
+      }
+    } catch (_) {}
+  }
+
+  // Direct-apply fallback for uploads that outlive their pick session
+  // (panel hidden by the OS file dialog before completion).
+  applyPickedIconToGroup(iconUrl) {
+    try {
+      const group = this._activeIconPickGroup;
+      if (!group || !group.isConnected) {
+        return false;
+      }
+      if (typeof iconUrl === "string" && iconUrl.length > 220 * 1024) {
+        console.warn("[AdvancedTabGroups] Icon too large, refusing to persist it.");
+        return false;
+      }
+      this.persistGroupIcon(group, iconUrl);
+      this._activeIconPickGroup = null;
+      return true;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error applying picked icon:", error);
+      return false;
+    }
+  }
+
+  // Shared render + persist tail for live picks, restores and fallbacks.
+  // Save first (updateIconColor bakes from storage) and sync before
+  // recoloring so the CSS icon color it reads is current.
+  persistGroupIcon(group, iconUrl) {
+    this.saveGroupIcon(group.id, iconUrl);
+    this.renderGroupIconElement(group, iconUrl);
+    this.syncGroupColorVars(group);
+    this.updateIconColor(group, this.savedColors[group.id]?.gradientColors || []);
+    document.querySelector("zen-library")?.update?.(true);
+  }
+
+  // Zen's picker search box may only filter emojis; ensure the SVG icon
+  // grid filters by name as well. Scoped strictly to Zen's own list so it
+  // never fights zia-extended-icons' Tabler grid.
+  addZenSvgSearchFallback(panel) {
+    try {
+      const search = document.getElementById("PanelUI-zen-emojis-picker-search");
+      if (!search || search.__atgSearchFallbackAdded) {
+        return;
+      }
+      search.__atgSearchFallbackAdded = true;
+      search.addEventListener("input", () => {
+        try {
+          const list = document.getElementById("PanelUI-zen-emojis-picker-svgs");
+          if (!list) {
+            return;
+          }
+          const terms = search.value.toLowerCase().split(/[\s,]+/).filter(Boolean);
+          for (const item of list.querySelectorAll("toolbarbutton")) {
+            if (!terms.length) {
+              item.hidden = false;
+              continue;
+            }
+            const haystack = [
+              item.getAttribute("tooltiptext"),
+              item.getAttribute("icon"),
+              item.getAttribute("src"),
+              item.getAttribute("label"),
+            ].filter(Boolean).join(" ").toLowerCase();
+            item.hidden = !terms.every(term => haystack.includes(term));
+          }
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  // ---- Bundled Tabler icons (no extra mod required) ----
+  // Adapted from zia-extended-icons (MIT): searchable Tabler picker backed
+  // by icons/tabler-*.js in this mod. Skipped whenever zia-extended-icons
+  // is active so the two never duplicate tabs or resource packs.
+  get atgTablerIconRoot() {
+    return "chrome://sine/content/advanced-tab-groups/icons";
+  }
+
+  get atgTablerIconHost() {
+    return "atg-tabler";
+  }
+
+  atgTablerPackPath() {
+    const holder = {};
+    Services.scriptloader.loadSubScript(`${this.atgTablerIconRoot}/tabler-pack.js`, holder);
+    return PathUtils.join(PathUtils.profileDir, "atg-tabler-icons", `tabler-${holder.ZiaTablerPack}.zip`);
+  }
+
+  atgTablerPointAtPack(pack) {
+    const handler = Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler);
+    const jar = Services.io.newURI(`jar:${PathUtils.toFileURI(pack)}!/`);
+    if (!handler.hasSubstitution(this.atgTablerIconHost) || handler.getSubstitution(this.atgTablerIconHost).spec !== jar.spec) {
+      handler.setSubstitution(this.atgTablerIconHost, jar);
+    }
+  }
+
+  setupAtgTablerPack() {
+    if (this._atgTablerPackReady || this.atgTablerUnavailable) {
+      return this._atgTablerPackReady;
+    }
+    this._atgTablerPackReady = (async () => {
+      try {
+        const pack = this.atgTablerPackPath();
+        const dir = PathUtils.parent(pack);
+        if (!(await IOUtils.exists(pack))) {
+          const bytes = await this.atgTablerPackFromBundle();
+          await IOUtils.makeDirectory(dir, { ignoreExisting: true });
+          const part = `${pack}.${Math.random().toString(36).slice(2)}.part`;
+          await IOUtils.write(part, bytes);
+          await IOUtils.move(part, pack);
+        }
+        this.atgTablerPointAtPack(pack);
+        for (const child of await IOUtils.getChildren(dir)) {
+          if (child !== pack && /tabler-[^/\\]*\.zip(\.[a-z0-9]+\.part)?$/.test(child)) {
+            IOUtils.remove(child).catch(() => {});
+          }
+        }
+        this.atgTablerRedrawPackIcons();
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Tabler pack setup failed:", error);
+        this.atgTablerUnavailable = true;
+      }
+    })();
+    return this._atgTablerPackReady;
+  }
+
+  atgTablerCrc32(bytes) {
+    let table = this._atgTablerCrcTable;
+    if (!table) {
+      table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) {
+          c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        }
+        table[n] = c >>> 0;
+      }
+      this._atgTablerCrcTable = table;
+    }
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) {
+      crc = table[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  async atgTablerPackFromBundle() {
+    const holder = {};
+    Services.scriptloader.loadSubScript(`${this.atgTablerIconRoot}/tabler-bundle.js`, holder);
+    const { head, icons } = holder.ZiaTablerBundle;
+    const entries = [];
+    for (const style of Object.keys(icons).sort()) {
+      for (const name of Object.keys(icons[style]).sort()) {
+        entries.push([`${style}/${name}.svg`, `${head[style]}${icons[style][name]}</svg>`]);
+      }
+    }
+    try {
+      entries.push(["LICENSE", await (await fetch(`${this.atgTablerIconRoot}/tabler-LICENSE`)).text()]);
+    } catch (_) {}
+    const encoder = new TextEncoder();
+    const items = entries.map(([name, text]) => {
+      const nameBytes = encoder.encode(name);
+      const data = encoder.encode(text);
+      return { nameBytes, data, crc: this.atgTablerCrc32(data) };
+    });
+    let size = 22;
+    for (const item of items) {
+      size += 30 + 46 + 2 * item.nameBytes.length + item.data.length;
+    }
+    const out = new Uint8Array(size);
+    const view = new DataView(out.buffer);
+    let at = 0;
+    const u16 = v => { view.setUint16(at, v, true); at += 2; };
+    const u32 = v => { view.setUint32(at, v, true); at += 4; };
+    const DATE = 0x21;
+    for (const item of items) {
+      item.offset = at;
+      u32(0x04034b50); u16(10); u16(0); u16(0); u16(0); u16(DATE);
+      u32(item.crc); u32(item.data.length); u32(item.data.length);
+      u16(item.nameBytes.length); u16(0);
+      out.set(item.nameBytes, at); at += item.nameBytes.length;
+      out.set(item.data, at); at += item.data.length;
+    }
+    const directory = at;
+    for (const item of items) {
+      u32(0x02014b50); u16(20); u16(10); u16(0); u16(0); u16(0); u16(DATE);
+      u32(item.crc); u32(item.data.length); u32(item.data.length);
+      u16(item.nameBytes.length); u16(0); u16(0); u16(0); u16(0);
+      u32(0o644 << 16); u32(item.offset);
+      out.set(item.nameBytes, at); at += item.nameBytes.length;
+    }
+    const directorySize = at - directory;
+    u32(0x06054b50); u16(0); u16(0); u16(items.length); u16(items.length);
+    u32(directorySize); u32(directory); u16(0);
+    return out;
+  }
+
+  atgTablerRedrawPackIcons() {
+    try {
+      const prefix = `resource://${this.atgTablerIconHost}/`;
+      for (const image of document.querySelectorAll("image, img")) {
+        for (const name of ["src", "href"]) {
+          const url = image.getAttribute(name);
+          if (url?.startsWith(prefix)) {
+            image.setAttribute(name, "");
+            image.setAttribute(name, url);
+            if (image.style.opacity === "0") {
+              image.style.opacity = "1";
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  atgTablerIcons() {
+    if (!this._atgTablerIndex) {
+      const holder = {};
+      try {
+        Services.scriptloader.loadSubScript(`${this.atgTablerIconRoot}/tabler-names.js`, holder);
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Tabler names failed to load:", error);
+        this.atgTablerUnavailable = true;
+        return [];
+      }
+      this._atgTablerIndex = (holder.ZiaTablerIcons || []).map(row => {
+        const [name, styles, words] = row.split("|");
+        return { name, outline: styles.includes("o"), filled: styles.includes("f"), words: words || "" };
+      });
+    }
+    return this._atgTablerIndex;
+  }
+
+  atgTablerStyle() {
+    try {
+      return Services.prefs.getStringPref("sine.extendedIcons.style", "outline") === "filled" ? "filled" : "outline";
+    } catch (_) {
+      return "outline";
+    }
+  }
+
+  atgTablerSearch(icons, text) {
+    const terms = text.toLowerCase().split(/[\s,]+/).filter(Boolean);
+    if (!terms.length) {
+      return icons;
+    }
+    const scored = [];
+    for (const icon of icons) {
+      const parts = icon.name.split("-");
+      let score = 0;
+      for (const term of terms) {
+        if (parts.includes(term)) {
+          score += 3;
+        } else if (parts.some(part => part.startsWith(term))) {
+          score += 2;
+        } else if (icon.name.includes(term) || icon.words.includes(term)) {
+          score += 1;
+        } else {
+          score = 0;
+          break;
+        }
+      }
+      if (score) {
+        if (icon.name === terms.join("-")) {
+          score += 10;
+        } else if (parts[0] === terms[0]) {
+          score += 1;
+        }
+        scored.push({ icon, score });
+      }
+    }
+    return scored.sort((a, b) => b.score - a.score || a.icon.name.length - b.icon.name.length).map(entry => entry.icon);
+  }
+
+  atgTablerAvailable() {
+    return !window.__sineExtendedIconsLoaded && !document.getElementById("sine-extended-icons-tab");
+  }
+
+  addAtgTablerTab(panel) {
+    try {
+      if (!this.atgTablerAvailable() || document.getElementById("atg-tabler-tab")) {
+        return;
+      }
+      const tabs = document.getElementById("PanelUI-zen-emojis-buttons-wrapper");
+      const pages = document.getElementById("PanelUI-zen-emojis-picker-pages");
+      if (!tabs || !pages) {
+        return;
+      }
+      const tab = document.createXULElement("toolbarbutton");
+      tab.id = "atg-tabler-tab";
+      tab.setAttribute("label", "Tabler");
+      tabs.appendChild(tab);
+
+      const zenTab = document.getElementById("PanelUI-zen-emojis-picker-change-svg");
+      if (zenTab && zenTab.getAttribute("label") !== "Zen") {
+        zenTab.removeAttribute("data-l10n-id");
+        zenTab.removeAttribute("data-l10n-args");
+        zenTab.setAttribute("label", "Zen");
+      }
+
+      const HTML = "http://www.w3.org/1999/xhtml";
+      const page = document.createXULElement("vbox");
+      page.id = "atg-tabler-page";
+      const bar = document.createElementNS(HTML, "div");
+      bar.id = "atg-tabler-searchbar";
+      const box = document.createElementNS(HTML, "input");
+      box.id = "atg-tabler-search";
+      box.setAttribute("type", "text");
+      box.setAttribute("placeholder", "Search icons");
+      const styles = document.createElementNS(HTML, "div");
+      styles.id = "atg-tabler-style";
+      const styleButtons = {};
+      for (const [value, label] of [["outline", "Outline"], ["filled", "Solid"]]) {
+        const button = document.createElementNS(HTML, "button");
+        button.className = "atg-tabler-style-option";
+        button.textContent = label;
+        button.addEventListener("click", event => {
+          event.stopPropagation();
+          try {
+            Services.prefs.setStringPref("sine.extendedIcons.style", value);
+          } catch (_) {}
+          showStyle();
+          render();
+        });
+        styleButtons[value] = button;
+        styles.appendChild(button);
+      }
+      bar.append(box, styles);
+      const grid = document.createElementNS(HTML, "div");
+      grid.id = "atg-tabler-grid";
+      const empty = document.createElementNS(HTML, "div");
+      empty.id = "atg-tabler-empty";
+      empty.textContent = "No icons found";
+      empty.hidden = true;
+      page.append(bar, grid, empty);
+      pages.appendChild(page);
+
+      const showStyle = () => {
+        const current = this.atgTablerStyle();
+        for (const [value, button] of Object.entries(styleButtons)) {
+          button.toggleAttribute("selected", value === current);
+        }
+      };
+
+      let showing = false;
+      const BATCH = 180;
+      let results = [];
+      let shown = 0;
+      let lastQuery = null;
+      const more = document.createElementNS(HTML, "div");
+      more.id = "atg-tabler-more";
+      const moreWatcher = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          addMore();
+        }
+      }, { root: grid, rootMargin: "200px" });
+      moreWatcher.observe(more);
+
+      const choose = url => {
+        try {
+          panel.removeAttribute("hide-none-option");
+        } catch (_) {}
+        this.completeActiveIconPick(url);
+      };
+
+      const addMore = () => {
+        if (shown >= results.length) {
+          return;
+        }
+        const style = this.atgTablerStyle();
+        const fragment = document.createDocumentFragment();
+        for (const icon of results.slice(shown, shown + BATCH)) {
+          const url = `resource://${this.atgTablerIconHost}/${style}/${icon.name}.svg`;
+          const item = document.createXULElement("toolbarbutton");
+          item.className = "toolbarbutton-1 zen-emojis-picker-svg atg-tabler-item";
+          item.setAttribute("tooltiptext", icon.name.replace(/-/g, " "));
+          item.style.listStyleImage = `url(${url})`;
+          item.addEventListener("command", event => {
+            event.stopPropagation();
+            choose(url);
+          });
+          fragment.appendChild(item);
+        }
+        shown = Math.min(results.length, shown + BATCH);
+        grid.insertBefore(fragment, more);
+      };
+
+      const render = () => {
+        const style = this.atgTablerStyle();
+        const query = `${style}:${(box.value || "").trim()}`;
+        if (query === lastQuery) {
+          return;
+        }
+        lastQuery = query;
+        results = this.atgTablerSearch(this.atgTablerIcons().filter(icon => icon[style]), box.value || "");
+        shown = 0;
+        grid.replaceChildren(more);
+        grid.scrollTop = 0;
+        empty.hidden = results.length > 0;
+        addMore();
+      };
+
+      const show = () => {
+        showing = true;
+        showStyle();
+        render();
+        box.focus({ preventScroll: true });
+        page.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+        tab.classList.add("selected");
+        for (const other of tabs.children) {
+          if (other !== tab) {
+            other.classList.remove("selected");
+          }
+        }
+      };
+
+      tab.addEventListener("command", show);
+      panel.addEventListener("command", event => {
+        if (event.target === tab) {
+          return;
+        }
+        if (event.target.id?.startsWith("PanelUI-zen-emojis-picker-change")) {
+          showing = false;
+          tab.classList.remove("selected");
+        }
+      });
+      box.addEventListener("input", render);
+      const zenSearch = document.getElementById("PanelUI-zen-emojis-picker-search");
+      zenSearch?.addEventListener("input", () => {
+        if (showing) {
+          box.value = zenSearch.value;
+          render();
+        }
+      });
+      panel.addEventListener("popupshown", () => {
+        showing = false;
+        tab.classList.remove("selected");
+        if (lastQuery !== null) {
+          render();
+        }
+      });
+
+      // If zia-extended-icons loads after us, its Tabler tab wins and ours
+      // is removed to avoid duplicates.
+      setTimeout(() => {
+        try {
+          if (!this.atgTablerAvailable() && tab.isConnected) {
+            tab.remove();
+            page.remove();
+          }
+        } catch (_) {}
+      }, 3000);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error adding Tabler tab:", error);
+    }
+  }
+
+  // True for values renderable as <image>: data: URLs, remote images, and
+  // internal icon URLs (chrome://, resource:// Tabler pack, moz-icon:).
+  // Anything else (emoji, single glyph) renders as a <label>.
+  isGroupIconImageUrl(iconUrl) {
+    if (typeof iconUrl !== "string") {
+      return false;
+    }
+    const url = iconUrl.trim();
+    if (!url || /^(javascript|data:text\/html)/i.test(url)) {
+      return false;
+    }
+    if (/^(data:image\/|blob:|moz-icon:|chrome:\/\/|resource:\/\/|file:\/\/)/i.test(url)) {
+      return true;
+    }
+    if (/^https?:\/\//i.test(url)) {
+      return /[\w\-%.~:/?#[\]@!$&'()*+,;=]+/i.test(url) &&
+        (/\.(svg|png|jpe?g|webp|gif|avif|ico|bmp)(\?[^\s]*)?(#[^\s]*)?$/i.test(url) ||
+          /^https?:\/\/[^\s]+$/i.test(url));
+    }
+    if (/\.svg(\?[^\s]*)?(#[^\s]*)?$/i.test(url)) {
+      return true;
+    }
+    // Bare Tabler/resource paths without scheme (defensive).
+    if (url.includes("/") && !/\s/.test(url) && /\.(svg|png|jpe?g|webp|gif|avif)$/i.test(url)) {
+      return true;
+    }
+    return false;
+  }
+
+  // Raster uploads render as-is; only recolor monochrome SVGs.
+  isRasterGroupIcon(src) {
+    if (typeof src !== "string") {
+      return false;
+    }
+    if (/^data:image\/(?!svg)/i.test(src)) {
+      return true;
+    }
+    return /\.(png|jpe?g|webp|gif|avif|bmp|ico)(\?[^\s]*)?(#[^\s]*)?$/i.test(src) &&
+      !/\.svg/i.test(src);
+  }
+
+  // Let the user pick a local image file and return a downscaled data: URL
+  // (max 96px, PNG to keep transparency). Caps size so SessionStore stays
+  // small; returns null on cancel/oversize/error.
+  promptCustomIconFile() {
+    return new Promise(resolve => {
+      try {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/svg+xml,image/png,image/jpeg,image/webp,image/gif,image/avif,image/x-icon,image/bmp";
+        input.style.display = "none";
+        document.documentElement.appendChild(input);
+        input.addEventListener("cancel", () => {
+          input.remove();
+          resolve(null);
+        });
+        input.addEventListener("change", () => {
+          const file = input.files?.[0];
+          input.remove();
+          if (!file) {
+            resolve(null);
+            return;
+          }
+          const MAX_BYTES = 200 * 1024;
+          if (file.size > 4 * 1024 * 1024) {
+            console.warn("[AdvancedTabGroups] Custom icon too large (>4MB), skipping:", file.name);
+            resolve(null);
+            return;
+          }
+          const reader = new FileReader();
+          reader.onerror = () => resolve(null);
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            if (dataUrl.startsWith("data:image/svg")) {
+              // Normalize solid fills/strokes to context paint so uploaded
+              // SVGs follow the same contrast fill rules as built-in icons.
+              const normalized = this.normalizeUploadedSvg(dataUrl);
+              const out = normalized || dataUrl;
+              if (out.length > MAX_BYTES) {
+                console.warn("[AdvancedTabGroups] Custom SVG too large, skipping:", file.name);
+                resolve(null);
+                return;
+              }
+              resolve(out);
+              return;
+            }
+            // Downscale raster images so persisted icons stay small.
+            const img = new Image();
+            img.onload = () => {
+              try {
+                const MAX_DIM = 96;
+                const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+                const width = Math.max(1, Math.round((img.naturalWidth || MAX_DIM) * scale));
+                const height = Math.max(1, Math.round((img.naturalHeight || MAX_DIM) * scale));
+                const canvas = document.createElement("canvas");
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext("2d");
+                ctx.clearRect(0, 0, width, height);
+                ctx.drawImage(img, 0, 0, width, height);
+                const out = canvas.toDataURL("image/png");
+                if (out.length > MAX_BYTES) {
+                  console.warn("[AdvancedTabGroups] Custom icon still too large after resize, skipping:", file.name);
+                  resolve(null);
+                  return;
+                }
+                resolve(out);
+              } catch (error) {
+                console.error("[AdvancedTabGroups] Error resizing custom icon:", error);
+                resolve(dataUrl.length <= MAX_BYTES ? dataUrl : null);
+              }
+            };
+            img.onerror = () => {
+              resolve(dataUrl.length <= MAX_BYTES ? dataUrl : null);
+            };
+            img.src = dataUrl;
+          };
+          reader.readAsDataURL(file);
+        }, { once: true });
+        input.click();
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error opening custom icon picker:", error);
+        resolve(null);
+      }
+    });
+  }
+
+  // Rewrite an uploaded SVG data: URL so solid fills/strokes use context
+  // paint (context-fill/context-stroke), exactly like Zen's own monochrome
+  // icons. Parsed with DOMParser (not regex) so every attribute spelling,
+  // inline style and embedded <style> block is covered. Gradient (url()),
+  // none and inherit paints are preserved. Returns the normalized data: URL,
+  // or null when decoding or validation fails (caller falls back to the
+  // original).
+  normalizeUploadedSvg(dataUrl) {
+    try {
+      const comma = dataUrl.indexOf(",");
+      if (comma < 0) {
+        return null;
+      }
+      const header = dataUrl.slice(0, comma);
+      const body = dataUrl.slice(comma + 1);
+      let text;
+      if (/;base64/i.test(header)) {
+        const bin = atob(body.replace(/\s+/g, ""));
+        text = new TextDecoder("utf-8", { fatal: true }).decode(
+          Uint8Array.from(bin, c => c.charCodeAt(0))
+        );
+      } else {
+        text = decodeURIComponent(body);
+      }
+      if (!/<svg[\s>]/i.test(text)) {
+        return null;
+      }
+      const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      if (!doc || doc.querySelector("parsererror") || !doc.documentElement ||
+          doc.documentElement.localName !== "svg") {
+        return null;
+      }
+      const isSolidPaint = value => /^(?!none\b|inherit\b|url\()/i.test(String(value).trim());
+      const normalizeDecls = (css, toFill, toStroke) => {
+        css = css.replace(/(fill\s*:\s*)([^;}!]+)/gi, (m, prop, value) =>
+          isSolidPaint(value) ? `${prop}${toFill}` : m);
+        css = css.replace(/(stroke\s*:\s*)([^;}!]+)/gi, (m, prop, value) =>
+          isSolidPaint(value) ? `${prop}${toStroke}` : m);
+        return css;
+      };
+      for (const el of doc.querySelectorAll("*")) {
+        for (const [attr, ctx] of [["fill", "context-fill"], ["stroke", "context-stroke"]]) {
+          if (el.hasAttribute(attr) && isSolidPaint(el.getAttribute(attr))) {
+            el.setAttribute(attr, ctx);
+          }
+        }
+        const inline = el.getAttribute("style");
+        if (inline && /(fill|stroke)\s*:/i.test(inline)) {
+          const next = normalizeDecls(inline, "context-fill", "context-stroke");
+          if (next !== inline) {
+            el.setAttribute("style", next);
+          }
+        }
+        if (el.localName === "style") {
+          const css = el.textContent || "";
+          const next = normalizeDecls(css, "context-fill", "context-stroke");
+          if (next !== css) {
+            el.textContent = next;
+          }
+        }
+      }
+      // Default root fill so fill-less paths theme too (inherited).
+      if (!doc.documentElement.hasAttribute("fill")) {
+        doc.documentElement.setAttribute("fill", "context-fill");
+      }
+      text = new XMLSerializer().serializeToString(doc);
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error normalizing uploaded SVG:", error);
+      return null;
+    }
+  }
+
+  // Shared DOM renderer: image URLs become <image class="group-icon">,
+  // emoji/text becomes a <label>. Used by both live picks and restores so
+  // custom icons render identically everywhere (sidebar + library).
+  renderGroupIconElement(group, iconUrl) {
+    const iconContainer = group.querySelector(".tab-group-icon-container");
+    let iconElement = group.querySelector(".tab-group-icon");
+    if (!iconContainer || !iconElement) {
+      return null;
+    }
+    iconElement.querySelector("image")?.remove();
+    iconElement.querySelector("label")?.remove();
+    if (!iconUrl) {
+      iconElement.removeAttribute("zen-emoji-open");
+      return iconElement;
+    }
+    let node = null;
+    let isImage = false;
+    try {
+      if (this.isGroupIconImageUrl(iconUrl)) {
+        isImage = true;
+        node = window.MozXULElement.parseXULToFragment(
+          `<image src="${iconUrl.replace(/"/g, "&quot;")}" class="group-icon" alt="Group Icon"/>`
+        ).firstElementChild;
+      } else {
+        const fragment = window.MozXULElement.parseXULToFragment("<label/>");
+        node = fragment.firstElementChild;
+        node.textContent = iconUrl;
+      }
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error creating group icon node:", error);
+      return null;
+    }
+    if (node) {
+      iconElement.appendChild(node);
+      // Mirror native picker state so sidebar/library selectors that key
+      // off zen-emoji-open keep working for emoji labels.
+      if (isImage) {
+        iconElement.removeAttribute("zen-emoji-open");
+      } else {
+        iconElement.setAttribute("zen-emoji-open", "true");
+      }
+    }
+    return iconElement;
+  }
+
+  // Context paint marker used for normalized uploads (either fill or
+  // stroke form; stroke-only SVGs carry no context-fill).
+  hasContextPaint(storedUrl) {
+    return typeof storedUrl === "string" && /context-(fill|stroke)(?!-opacity)/i.test(storedUrl);
+  }
+
+  // Render copy of a normalized upload with the contrast color baked in.
+  // Baking (instead of relying on context-fill resolving through <image>)
+  // makes uploads render identically on every build: plain recolored SVG,
+  // no dependence on -moz-context-properties, inline styles or Zen version.
+  // Storage always keeps the context original so later recolors rebake.
+  // Opacity variants (context-fill-opacity) are left intact.
+  bakeGroupIconSvg(storedUrl, contrast) {
+    if (typeof storedUrl !== "string" || !/^data:image\/svg/i.test(storedUrl)) {
+      return null;
+    }
+    return storedUrl
+      .replace(/context-fill(?!-opacity)/g, contrast)
+      .replace(/context-stroke(?!-opacity)/g, contrast);
+  }
+
+  // The exact icon color CSS paints with: .tab-group-icon-container sets
+  // `color: var(--tab-group-stroke)`, so its computed color is the resolved
+  // stroke (var()/light-dark()/color-mix() all resolved, gradients excluded).
+  // Returns "" when it cannot be determined.
+  cssIconColor(group) {
+    try {
+      const container = group?.querySelector?.(".tab-group-icon-container");
+      if (container) {
+        const color = getComputedStyle(container).color;
+        if (color && !/gradient/i.test(color)) {
+          return color;
+        }
+      }
+    } catch (_) {}
+    try {
+      const stroke = String(this.getGroupStrokeValue(group) || "").trim();
+      if (stroke && !/gradient/i.test(stroke)) {
+        return stroke;
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  // Contrast fallback when no gradient data is available: black icons on
+  // light group colors, white icons otherwise (matches the .group-icon
+  // stylesheet default of white).
+  groupNeedsBlackIcon(group) {
+    try {
+      const match = String(this.getGroupColorValue(group) || "")
+        .match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (match) {
+        const luminance = (0.2126 * +match[1] + 0.7152 * +match[2] + 0.0722 * +match[3]) / 255;
+        return luminance >= 0.5;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // Clear the visible icon and drop persisted state (context menu action).
+  removeGroupIcon(group) {
+    try {
+      if (!group) {
+        return;
+      }
+      group.querySelector(".tab-group-icon image")?.remove();
+      group.querySelector(".tab-group-icon label")?.remove();
+      group.querySelector(".tab-group-icon")?.removeAttribute("zen-emoji-open");
+      this.removeSavedIcon(group.id);
+      this.syncGroupColorVars(group);
+      document.querySelector("zen-library")?.update?.(true);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error removing group icon:", error);
+    }
+  }
+
   get tabGroups() {
     const groups = [
       ...(Array.isArray(gBrowser.tabGroups) ? gBrowser.tabGroups : []),
@@ -865,6 +1897,7 @@ class AdvancedTabGroups {
           </menu>
           <menuitem class="rename-group" label="Rename"/>
           <menuitem class="change-group-icon" label="Change Icon"/>
+          <menuitem class="remove-group-icon" label="Remove Icon"/>
           <menuseparator/>
           <menu class="move-group-to-space" label="Move to Space">
             <menupopup class="move-group-to-space-popup"/>
@@ -888,6 +1921,7 @@ class AdvancedTabGroups {
       const useFaviconColorItem = contextMenu.querySelector(".use-favicon-color");
       const renameGroupItem = contextMenu.querySelector(".rename-group");
       const changeGroupIconItem = contextMenu.querySelector(".change-group-icon");
+      const removeGroupIconItem = contextMenu.querySelector(".remove-group-icon");
       const moveGroupToSpaceItem = contextMenu.querySelector(
         ".move-group-to-space"
       );
@@ -905,6 +1939,7 @@ class AdvancedTabGroups {
         [useFaviconColorItem, "_useFaviconColor"],
         [renameGroupItem, this.renameGroupStart],
         [changeGroupIconItem, this.applyGroupIcon],
+        [removeGroupIconItem, this.removeGroupIcon],
         [ungroupTabsItem, this.ungroupTabs],
         [convertToFolderItem, this.convertGroupToFolder],
         [deleteGroupItem, this.deleteGroup]
@@ -1526,17 +2561,61 @@ class AdvancedTabGroups {
 
   updateIconColor(group, colors) {
     const groupIcon = group.querySelector(".group-icon");
-    // If the background is dark mode, we need to get the contrast of that (opposite).
-    const shouldBeDarkMode = !gZenThemePicker.shouldBeDarkMode(
-      typeof colors[0] === "object" ? gZenThemePicker.getMostDominantColor(colors) : colors
-    );
-    if (groupIcon) {
-      if (shouldBeDarkMode) {
-        groupIcon.style.fill = "black";
-      } else {
-        groupIcon.style.fill = "white";
-      }
+    if (!groupIcon) {
+      return;
     }
+    // Full-color uploads (PNG/JPG photos) render as-is; only monochrome
+    // SVGs get the contrast fill.
+    try {
+      const src = groupIcon.getAttribute?.("src") || "";
+      if (src && this.isRasterGroupIcon(src)) {
+        groupIcon.style.fill = "";
+        groupIcon.style.stroke = "";
+        return;
+      }
+    } catch (_) {}
+    let useBlack = null;
+    try {
+      const input = typeof colors?.[0] === "object"
+        ? gZenThemePicker.getMostDominantColor(colors)
+        : colors;
+      // If the background is dark mode, we need the contrast of that (opposite).
+      const decided = !gZenThemePicker.shouldBeDarkMode(input);
+      if (typeof decided === "boolean") {
+        useBlack = decided;
+      }
+    } catch (_) {}
+    if (useBlack === null) {
+      // No gradient data (favicon/native color groups) or picker hiccup:
+      // derive contrast from the group's live color so uploads theme
+      // everywhere, not just on gradient groups.
+      useBlack = this.groupNeedsBlackIcon(group);
+    }
+    const contrast = useBlack ? "black" : "white";
+    // Prefer the exact CSS icon color (.tab-group-icon-container's resolved
+    // stroke color) so uploads match built-ins by construction; fall back to
+    // the computed contrast when CSS gives nothing usable.
+    const paint = this.cssIconColor(group) || contrast;
+    try {
+      // Normalized upload? Bake the paint into the rendered copy so it
+      // shows correctly even where context-fill doesn't resolve through
+      // <image>. Storage keeps the context original; recolors rebake.
+      const stored = this.savedIcons?.[group.id];
+      if (this.hasContextPaint(stored)) {
+        const baked = this.bakeGroupIconSvg(stored, paint);
+        if (baked && groupIcon.getAttribute("src") !== baked) {
+          groupIcon.setAttribute("src", baked);
+        }
+        groupIcon.style.fill = "";
+        groupIcon.style.stroke = "";
+        return;
+      }
+    } catch (_) {}
+    // Driven into context-fill SVGs (built-in) via -moz-context-properties
+    // on .group-icon; harmless for currentColor/raster icons, which don't
+    // consult these properties.
+    groupIcon.style.fill = paint;
+    groupIcon.style.stroke = paint;
   }
 
   // Handle platform-dispatched creation event for groups
@@ -2688,40 +3767,52 @@ class AdvancedTabGroups {
       iconContainer.appendChild(iconElement);
     }
 
-    // Open the emoji picker with SVG icons only
+    // Open the icon picker: Zen icons (searchable via fallback) + Tabler
+    // (zia-extended-icons when installed, else ATG's bundled tab) + custom
+    // upload. See openAtgIconPicker: no global open() wrapping, so this
+    // cannot fight zia's wrapper in either load order.
     if (!iconUrl) {
-      iconUrl = await window.gZenEmojiPicker.open(iconElement, {
-        onlySvgIcons: !Services.prefs.getBoolPref("browser.tabs.groups.allow-emojis", false)
-      });
-    }
-  
-    iconElement.querySelector("image")?.remove();
-    iconElement.querySelector("label")?.remove();
-
-    if (iconUrl) {
-      // Create an image element for the SVG icon using parsed XUL
-      let imgFrag;
-      if (iconUrl.endsWith(".svg")) {
-        imgFrag = window.MozXULElement.parseXULToFragment(`
-          <image src="${iconUrl}" class="group-icon" alt="Group Icon"/>
-        `);
-      } else {
-        imgFrag = window.MozXULElement.parseXULToFragment(`
-          <label>${iconUrl}</label>
-        `);
+      let picked = null;
+      try {
+        picked = await this.openAtgIconPicker(iconElement);
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error picking group icon:", error);
+        picked = null;
       }
-      iconElement.appendChild(imgFrag.firstElementChild);
-
-      this.updateIconColor(group, this.savedColors[group.id]?.gradientColors || [])
-      this.syncGroupColorVars(group);
-    
-      // Save the icon to persistent storage
-      this.saveGroupIcon(group.id, iconUrl);
-    } else {
-      // Remove the icon from persistent storage
-      this.removeSavedIcon(group.id);
+      if (!picked || (picked.value == null && !picked.explicit)) {
+        // Dismissed (ESC/click-away): keep the existing icon.
+        return;
+      }
+      iconUrl = typeof picked.value === "string" ? picked.value.trim() : picked.value;
+      if (!iconUrl) {
+        // Explicit "none" (trash button): clear the icon.
+        this.removeGroupIcon(group);
+        return;
+      }
     }
 
+    // One-time migration for SVGs stored before context normalization:
+    // normalize now so they follow the same contrast rules, then the
+    // normalized URL is what gets rendered and re-saved below.
+    if (
+      typeof iconUrl === "string" &&
+      /^data:image\/svg/i.test(iconUrl) &&
+      !this.hasContextPaint(iconUrl)
+    ) {
+      try {
+        const normalized = this.normalizeUploadedSvg(iconUrl);
+        if (normalized && normalized !== iconUrl) {
+          iconUrl = normalized;
+        }
+      } catch (_) {}
+    }
+
+    if (typeof iconUrl === "string" && iconUrl.length > 220 * 1024) {
+      console.warn("[AdvancedTabGroups] Icon too large, refusing to persist it.");
+      return;
+    }
+
+    this.persistGroupIcon(group, iconUrl);
   }
 
   // Apply saved icons to tab groups

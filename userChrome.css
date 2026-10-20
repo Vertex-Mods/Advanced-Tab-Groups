@@ -92,6 +92,7 @@ tab-group:not([split-view-group]) {
         width: 12px;
         height: 12px;
         fill: white;
+        -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
         @media (-moz-pref("browser.tabs.groups.arc-style")) {
           width: 16px;
           height: 16px;
@@ -299,4 +300,138 @@ tab-group:not([split-view-group]) {
 tab-group[drag-image] > .tab-group-container,
 tab-group[drag-image] .tab-group-overflow-count-container {
   display: none !important;
+}
+
+/* Issue #156: searchable picker + custom upload + bundled Tabler tab.
+   ATG additions to #PanelUI-zen-emojis-picker (visible only during group
+   icon picks); raster uploads render un-tinted via object-fit. */
+
+/* Upload trigger, pinned far-left of the picker header, mirroring the
+   trash/delete button (#PanelUI-zen-emojis-picker-none) pinned far-right:
+   same icon-only sizing and hover. Icon is Zen's own share glyph, same
+   chrome-icon mechanism as the trash icon. Zen disables pointer events on
+   the header's first toolbarbutton, so they are re-enabled here. */
+#atg-custom-icon-header-upload {
+  list-style-image: url("chrome://browser/skin/zen-icons/share.svg") !important;
+  -moz-context-properties: fill, fill-opacity !important;
+  fill: currentColor !important;
+  width: 22px !important;
+  height: 22px !important;
+  appearance: none !important;
+  pointer-events: auto !important;
+  transition: opacity 0.08s ease-in-out !important;
+
+  &:hover {
+    background-color: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1)) !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+  }
+}
+
+#atg-custom-icon-header-upload label {
+  display: none !important;
+}
+
+#atg-custom-icon-header-upload[hidden] {
+  display: none !important;
+}
+
+/* Bundled searchable Tabler tab (same layout as the custom icon picker
+   mod, atg- IDs so the two never clash when both are installed). */
+#atg-tabler-tab[hidden],
+#atg-tabler-page[hidden] {
+  display: none !important;
+}
+
+#atg-tabler-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+}
+
+#atg-tabler-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#atg-tabler-search {
+  flex: 1;
+  min-width: 0;
+  padding: 4px;
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  &:focus,
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+#atg-tabler-style {
+  display: flex;
+  flex: none;
+  padding: 2px;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+.atg-tabler-style-option {
+  appearance: none;
+  margin: 0;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: default;
+
+  &:hover {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  &[selected] {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: rgb(255, 255, 255);
+  }
+}
+
+#atg-tabler-empty {
+  padding: 18px 10px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}
+
+#atg-tabler-more {
+  grid-column: 1 / -1;
+  height: 1px;
+}
+
+#atg-tabler-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  align-content: start;
+  gap: 5px;
+  padding: 0 10px 10px;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.atg-tabler-item {
+  -moz-context-properties: fill, fill-opacity, stroke;
+  fill: rgba(255, 255, 255, 0.85);
+}
+
+tab-group:not([split-view-group]) .tab-group-icon .group-icon {
+  object-fit: contain !important;
 }

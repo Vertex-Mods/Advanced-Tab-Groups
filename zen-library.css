@@ -134,7 +134,7 @@
   width: 12px;
   height: 12px;
   fill: white;
-  -moz-context-properties: fill, fill-opacity;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
 }
 
 .atg-tab-group-icon label {

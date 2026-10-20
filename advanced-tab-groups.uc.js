@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.9.0 ======= */
+/* ======= v3.9.1 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -26,6 +26,17 @@ class AdvancedTabGroups {
   async init() {
     // Wait for any dependencies before proceeding.
     await this.waitForDependencies();
+
+    // Start the bundled Tabler pack before any saved icons are handed to
+    // groups: an <image> pointing at resource://atg-tabler/* before its
+    // substitution is registered renders broken.
+    // applySavedIcons / applyGroupIcon additionally gate per icon URL
+    // (see ensureAtgCustomIconsReady).
+    try {
+      if (this.atgTablerAvailable()) {
+        this.setupAtgTablerPack();
+      }
+    } catch (_) {}
 
     // Load saved tab group settings
     this.applySavedColors();
@@ -912,11 +923,42 @@ class AdvancedTabGroups {
     }
   }
 
+  // True for icons served by this mod's bundled Tabler pack. Those need
+  // their resource:// host registered (setupAtgTablerPack) before any
+  // group renders them; anything else (emoji, data: uploads, native and
+  // zia URLs) needs no initialization.
+  isAtgTablerIconUrl(iconUrl) {
+    try {
+      return typeof iconUrl === "string" && iconUrl.startsWith(`resource://${this.atgTablerIconHost}/`);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Resolves once handing `iconUrl` to a group is safe. Awaits the
+  // bundled Tabler pack for atg-tabler URLs (kicking it off when needed);
+  // a null generic pre-wait resolves once the owned pack (if any) is up.
+  // Never rejects.
+  ensureAtgCustomIconsReady(iconUrl = null) {
+    try {
+      if (iconUrl != null && !this.isAtgTablerIconUrl(iconUrl)) {
+        return Promise.resolve();
+      }
+      if (iconUrl == null && !this.atgTablerAvailable()) {
+        return Promise.resolve();
+      }
+      return Promise.resolve(this.setupAtgTablerPack());
+    } catch (_) {
+      return Promise.resolve();
+    }
+  }
+
   setupAtgTablerPack() {
     if (this._atgTablerPackReady || this.atgTablerUnavailable) {
       return this._atgTablerPackReady;
     }
     this._atgTablerPackReady = (async () => {
+      this._atgTablerPackFailed = false;
       try {
         const pack = this.atgTablerPackPath();
         const dir = PathUtils.parent(pack);
@@ -936,6 +978,7 @@ class AdvancedTabGroups {
         this.atgTablerRedrawPackIcons();
       } catch (error) {
         console.error("[AdvancedTabGroups] Tabler pack setup failed:", error);
+        this._atgTablerPackFailed = true;
         this.atgTablerUnavailable = true;
       }
     })();
@@ -3812,16 +3855,33 @@ class AdvancedTabGroups {
       return;
     }
 
+    // Custom Tabler icons must wait for their resource:// host: handing
+    // the URL to the group any earlier renders a broken icon.
+    if (this.isAtgTablerIconUrl(iconUrl)) {
+      await this.ensureAtgCustomIconsReady(iconUrl);
+      if (this._atgTablerPackFailed) {
+        console.warn("[AdvancedTabGroups] Tabler pack unavailable, skipping icon for group:", group?.id);
+        return;
+      }
+    }
+
     this.persistGroupIcon(group, iconUrl);
   }
 
-  // Apply saved icons to tab groups
-  applySavedIcons() {
+  // Apply saved icons to tab groups. The bundled Tabler pack is awaited
+  // first so resource://atg-tabler/* icons are never handed to groups
+  // before their host exists (each icon is gated again in applyGroupIcon).
+  async applySavedIcons() {
     try {
+      await this.ensureAtgCustomIconsReady();
       Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
-        const group = this.getGroupById(groupId);
-        if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-          this.applyGroupIcon(group, iconUrl);
+        try {
+          const group = this.getGroupById(groupId);
+          if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
+            this.applyGroupIcon(group, iconUrl);
+          }
+        } catch (error) {
+          console.error("[AdvancedTabGroups] Error applying saved icon:", groupId, error);
         }
       });
     } catch (error) {

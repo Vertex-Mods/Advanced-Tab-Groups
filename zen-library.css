@@ -223,6 +223,15 @@
     display: none;
     background: none !important;
     margin: 0 !important;
+    /* Same 70% mix the Arc-mode label uses, so icon and text stay in sync. */
+    color: color-mix(in srgb, var(--atg-tab-group-textcolor) 70%, transparent) !important;
+    fill: color-mix(in srgb, var(--atg-tab-group-textcolor) 70%, transparent) !important;
+    width: 16px !important;
+    height: 16px !important;
+    flex: none !important;
+    position: relative !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
 
   .atg-tab-group-icon.has-custom-icon,
@@ -231,9 +240,14 @@
   }
 
   .atg-tab-group-icon .group-icon {
-    width: 14px !important;
-    height: 14px !important;
-    fill: light-dark(black, white) !important;
+    width: 16px !important;
+    height: 16px !important;
+    fill: currentColor !important;
+    stroke: currentColor !important;
+  }
+
+  .atg-tab-group-icon label {
+    color: currentColor !important;
   }
 
   .library-workspace-item.atg-tab-group .item-label {

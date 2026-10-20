@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.9.1 - 2026-10-20 - Arc-mode icon color/size + Tabler init gate
+
+- Arc-like group mode: the group icon now uses the same color as the group text (sidebar and Zen Library), instead of the default-mode stroke/black fill.
+- Arc-like group mode: group icons render at 16x16, filling the icon box.
+- Custom Tabler icons are no longer handed to groups until the bundled Tabler pack is initialized: the pack starts early at startup, saved icons wait for it, and per-icon restores/picks await their resource host (skipping with a warning if setup failed) so icons can't render broken.
+
 ## 3.9.0 - 2026-10-20 - searchable icons + custom icons (fixes #156)
 
 - Change Icon now opens a searchable picker: Zen SVG icons filter as you type (native search only covers emojis), plus a searchable Tabler tab — zia-extended-icons' tab when that mod is installed, otherwise ATG's bundled Tabler set (icons/ in this mod, no extra mod needed).

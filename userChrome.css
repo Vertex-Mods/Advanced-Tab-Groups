@@ -220,9 +220,23 @@ tab-group:not([split-view-group]) {
       .tab-group-icon-container {
         margin: 0 0 0 10px !important;
         display: none !important;
+        /* Keep the icon in sync with the group text color in Arc mode.
+           The container resolves to the same 70% mix the label uses,
+           and the icon inherits it via currentColor (instead of
+           --tab-group-stroke from the default look). */
+        color: color-mix(in srgb, currentColor 70%, transparent) !important;
 
         .tab-group-icon {
           background: none !important;
+          color: inherit !important;
+          fill: currentColor !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          width: 16px !important;
+          height: 16px !important;
+          flex: none !important;
+          position: relative !important;
         }
 
         &:has(label, .group-icon) {
@@ -234,9 +248,14 @@ tab-group:not([split-view-group]) {
         }
         
         & .group-icon {
-          width: 14px !important;
-          height: 14px !important;
-          fill: color-mix(in srgb, currentColor 70%, transparent) !important;
+          width: 16px !important;
+          height: 16px !important;
+          fill: currentColor !important;
+          stroke: currentColor !important;
+        }
+
+        & label {
+          color: currentColor !important;
         }
       }
 

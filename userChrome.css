@@ -275,6 +275,17 @@ tab-group:not([split-view-group]) {
         display: none !important;
       }
 
+      /* Same hover box as the create-folder button below so both
+         header buttons match in size. */
+      &:hover .tab-close-button {
+        display: flex !important;
+        visibility: visible !important;
+        width: 20px !important;
+        height: 20px !important;
+        padding: 4px !important;
+        -moz-window-dragging: no-drag !important;
+      }
+
       @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
         &:hover .tab-group-folder-button {
           display: flex !important;

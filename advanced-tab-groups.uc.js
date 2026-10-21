@@ -788,8 +788,9 @@ class AdvancedTabGroups {
       };
       const done = (value, explicit) => finish(value, explicit);
       // Our own UI (bundled Tabler tab, header upload button) completes
-      // through this; it hides the panel first so native/zia also settle
-      // (their late settlements are ignored via `settled`).
+      // through this; completeActiveIconPick settles first and hides the
+      // panel after, so native/zia late settlements and the popuphidden
+      // fallback are ignored via `settled`.
       this._activeIconPickDone = done;
       try {
         this._activeIconPickGroup = anchor?.closest?.("tab-group") || null;
@@ -838,10 +839,16 @@ class AdvancedTabGroups {
     if (typeof done !== "function") {
       return false;
     }
+    // Settle synchronously BEFORE hiding the panel: hidePopup can fire
+    // popuphidden fast enough for its onHidden fallback to win the race and
+    // drop this value (no .group-icon gets rendered, and the upload
+    // fallback is skipped because this still returned true). finish()
+    // detaches onHidden itself, so the later hidden event is ignored.
+    // Native/zia picks don't hit this: they settle via onSelect first.
+    done(value, true);
     try {
       document.getElementById("PanelUI-zen-emojis-picker")?.hidePopup();
     } catch (_) {}
-    done(value, true);
     return true;
   }
 

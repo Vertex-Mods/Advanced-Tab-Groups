@@ -332,6 +332,14 @@ tab-group[drag-image] .tab-group-overflow-count-container {
   display: none !important;
 }
 
+/* ATG workspace visibility (see updateGroupVisibility): real strips only.
+   The Library spaces section skips hidden nodes when copying rows into
+   space cards, so groups hide here via atg-ws-hidden instead of the hidden
+   attribute — cards then render groups for every space. */
+#tabbrowser-tabs:not(.zen-library-space-tabs) tab-group[atg-ws-hidden]:not([drag-image]) {
+  display: none !important;
+}
+
 /* Issue #156: searchable picker + custom upload + bundled Tabler tab.
    ATG additions to #PanelUI-zen-emojis-picker (visible only during group
    icon picks); raster uploads render un-tinted via object-fit. */

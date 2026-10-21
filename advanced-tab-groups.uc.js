@@ -55,6 +55,9 @@ class AdvancedTabGroups {
     // Make Zen Library render ATG tab groups differently from folders.
     this.setupZenLibraryIntegration();
 
+    // Render ATG groups (with icons/colors) in Library spaces-section cards.
+    this.setupZenLibrarySpacesSectionIntegration();
+
     // Remove built-in tab group editor menus if they exist
     this.removeBuiltinTabGroupMenu();
 
@@ -89,7 +92,7 @@ class AdvancedTabGroups {
     // applySavedColors never waits (waitForElm observes the whole body) on an id that is gone.
     document.addEventListener("TabGroupRemoved", (event) => {
       const group = event.target;
-      if (group?.localName === "tab-group" && !group.hasAttribute("split-view-group")) {
+      if (group?.localName === "tab-group" && !group.hasAttribute("split-view-group") && !this.isLibraryGroupCopy(group)) {
         this.removeSavedGroupState(group.id);
       }
     });
@@ -415,6 +418,135 @@ class AdvancedTabGroups {
     }, 500);
   }
 
+  // ---- Zen Library spaces-section cards (per-space strips) ----
+  // Upstream shallow-clones real tab-groups into each space card and fills
+  // their rows itself, so ATG must not process those live copies (guarded in
+  // processGroup/tabGroups) — but the clone drops ATG's light-DOM icon, so
+  // cards would show groups with no icon. Mirror the real icon container
+  // into each copy here, and keep it in sync when icons recolor.
+  // Visibility comes from updateGroupVisibility using atg-ws-hidden (hiding
+  // scoped to real strips in CSS) instead of `hidden`, which the section
+  // skips when copying rows.
+  setupZenLibrarySpacesSectionIntegration() {
+    if (this._spacesSectionIntegrated) {
+      return;
+    }
+    this._spacesSectionIntegrated = true;
+    // The library host is dropped when the library closes, so resolve the
+    // section lazily; card rebuilds after that are caught by setupObserver,
+    // which queues a sync whenever section DOM lands.
+    this.waitForElm("zen-library-spaces-section")
+      .then(section => {
+        try {
+          this.syncSpacesSectionCopies(section);
+        } catch (_) {}
+      })
+      .catch(() => {});
+  }
+
+  queueSpacesSectionSync(section = null) {
+    if (this._spacesSectionQueued) {
+      return;
+    }
+    this._spacesSectionQueued = true;
+    requestAnimationFrame(() => {
+      this._spacesSectionQueued = false;
+      try {
+        const root = section?.isConnected
+          ? section
+          : document.querySelector("zen-library-spaces-section");
+        if (root) {
+          this.syncSpacesSectionCopies(root);
+        }
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error syncing spaces section copies:", error);
+      }
+    });
+  }
+
+  // Key for "does this copy still match the real icon": container markup
+  // covers the icon node, its baked paint and the synced color vars.
+  spacesSectionCopyIconKey(realIconContainer) {
+    try {
+      return realIconContainer?.outerHTML ?? "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  syncSpacesSectionCopyIcon(copy, real) {
+    try {
+      const label = copy.querySelector(":scope > .tab-group-label-container");
+      const realIcon = real.querySelector(":scope > .tab-group-label-container > .tab-group-icon-container");
+      if (!label || !realIcon) {
+        return;
+      }
+      const key = this.spacesSectionCopyIconKey(realIcon);
+      const existing = label.querySelector(":scope > .tab-group-icon-container[data-atg-copy-icon]");
+      if (existing) {
+        if (existing.dataset.atgCopyIconKey === key) {
+          return;
+        }
+        existing.remove();
+      }
+      if (!key) {
+        return;
+      }
+      const iconClone = realIcon.cloneNode(true);
+      iconClone.querySelectorAll("[id]").forEach(node => node.removeAttribute("id"));
+      iconClone.setAttribute("data-atg-copy-icon", "true");
+      iconClone.dataset.atgCopyIconKey = key;
+      label.prepend(iconClone);
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error syncing spaces section copy icon:", error);
+    }
+  }
+
+  syncSpacesSectionCopies(section) {
+    try {
+      const root = section || document.querySelector("zen-library-spaces-section");
+      if (!root) {
+        return;
+      }
+      for (const copy of root.querySelectorAll('tab-group[id$="-copy"]')) {
+        try {
+          // Belt and suspenders with updateGroupVisibility: copies always
+          // render in cards, never inherit workspace hiding.
+          copy.removeAttribute("hidden");
+          copy.removeAttribute("atg-ws-hidden");
+          const realId = copy.id.slice(0, -"-copy".length);
+          const real = realId ? this.getGroupById(realId) : null;
+          if (!real || real.hasAttribute("split-view-group")) {
+            continue;
+          }
+          this.syncSpacesSectionCopyIcon(copy, real);
+        } catch (error) {
+          console.error("[AdvancedTabGroups] Error syncing spaces section copy:", error);
+        }
+      }
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error syncing spaces section copies:", error);
+    }
+  }
+
+  // Icon recolors don't rebuild cards, so push them to copies directly.
+  refreshSpacesSectionGroupIcon(group) {
+    try {
+      if (!group?.id || typeof document === "undefined") {
+        return;
+      }
+      const copies = document.querySelectorAll(`zen-library-spaces-section tab-group[id="${group.id}-copy"]`);
+      if (!copies.length) {
+        return;
+      }
+      for (const copy of copies) {
+        copy.removeAttribute("hidden");
+        copy.removeAttribute("atg-ws-hidden");
+        this.syncSpacesSectionCopyIcon(copy, group);
+      }
+    } catch (_) {}
+  }
+
   setupObserver() {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
@@ -444,6 +576,14 @@ class AdvancedTabGroups {
                   this.processGroup(group);
                 }
               });
+              // Library spaces-section cards rebuild wholesale (and their
+              // group copies connect as live elements) — sync ATG copy icons.
+              if (
+                node.matches?.("zen-library-spaces-section, .zen-library-space-tabs, tab-group") ||
+                node.querySelector?.("zen-library-spaces-section, .zen-library-space-tabs")
+              ) {
+                this.queueSpacesSectionSync();
+              }
             }
           });
         }
@@ -526,7 +666,12 @@ class AdvancedTabGroups {
     }
   }
 
-  // Update visibility of tab groups based on active workspace
+  // Update visibility of tab groups based on active workspace.
+  // Tracked with atg-ws-hidden (hiding scoped to real strips in CSS) instead
+  // of the hidden attribute: the Library spaces section skips hidden nodes
+  // when copying rows, so hidden groups would never render in space cards.
+  // tabGroups already excludes section copies, but clear both attributes
+  // there anyway (older ATG hid copies too).
   updateGroupVisibility() {
     try {
       // Get all tab groups in the active workspace using DOM query (for active workspace detection)
@@ -534,18 +679,21 @@ class AdvancedTabGroups {
       const activeGroupIds = new Set(Array.from(activeWorkspaceGroups).map(g => g.id));
 
       this.tabGroups.forEach(group => {
-        // Skip split-view-groups
-        if (group.hasAttribute && group.hasAttribute("split-view-group")) {
+        // Skip split-view-groups and drag ghosts
+        if (group.hasAttribute && (group.hasAttribute("split-view-group") || group.hasAttribute("drag-image"))) {
           return;
         }
-      
-        // Add or remove hidden attribute based on workspace membership
+
+        // Migration: older ATG revisions hid groups with `hidden`.
+        group.removeAttribute("hidden");
+
+        // Add or remove workspace-hiding based on workspace membership
         if (activeGroupIds.has(group.id)) {
-          // Group is in active workspace - remove hidden attribute
-          group.removeAttribute("hidden");
+          // Group is in active workspace - make sure it shows
+          group.removeAttribute("atg-ws-hidden");
         } else {
-          // Group is not in active workspace - add hidden attribute
-          group.setAttribute("hidden", "true");
+          // Group is not in active workspace - hide in real strips (CSS)
+          group.setAttribute("atg-ws-hidden", "true");
         }
       });
     } catch (error) {
@@ -859,6 +1007,8 @@ class AdvancedTabGroups {
     this.renderGroupIconElement(group, iconUrl);
     this.syncGroupColorVars(group);
     this.updateIconColor(group, this.savedColors[group.id]?.gradientColors || []);
+    // Push the new icon into spaces-section cards (no rebuild on picks).
+    this.refreshSpacesSectionGroupIcon(group);
     document.querySelector("zen-library")?.update?.(true);
   }
 
@@ -1637,13 +1787,33 @@ class AdvancedTabGroups {
     }
   }
 
+  // Library spaces-section cards hold live tab-group CLONES of the real
+  // groups (upstream shallow-clones them, then fills their rows). They share
+  // the tag name and live in the main document, so every tracker must
+  // ignore them: processing/hiding/coloring copies breaks both the cards
+  // and the real groups' saved state.
+  isLibraryGroupCopy(node) {
+    try {
+      if (!node || node.localName !== "tab-group") {
+        return false;
+      }
+      if (typeof node.id === "string" && node.id.endsWith("-copy")) {
+        return true;
+      }
+      return !!node.closest?.("zen-library-spaces-section, zen-library");
+    } catch (_) {
+      return false;
+    }
+  }
+
   get tabGroups() {
     const groups = [
       ...(Array.isArray(gBrowser.tabGroups) ? gBrowser.tabGroups : []),
       ...document.querySelectorAll("tab-group"),
     ];
     return Array.from(new Set(groups)).filter(group =>
-      group.localName === "tab-group" || group.tagName === "tab-group"
+      (group.localName === "tab-group" || group.tagName === "tab-group") &&
+      !this.isLibraryGroupCopy(group)
     );
   }
 
@@ -1747,6 +1917,12 @@ class AdvancedTabGroups {
   }
 
   processGroup(group) {
+    // Library spaces-section copies initialize as live elements but must
+    // stay native: the section owns their rendering and interaction, and
+    // ATG's buttons/menus/colors would leak into saved state under copy ids.
+    if (this.isLibraryGroupCopy(group)) {
+      return;
+    }
     // Skip if already processed, if it's a folder, or if it's a split-view-group
     if (
       group.hasAttribute("data-close-button-added") ||
@@ -2381,7 +2557,8 @@ class AdvancedTabGroups {
       group.localName === "tab-group" &&
       !group.hasAttribute("split-view-group") &&
       !group.classList.contains("zen-folder") &&
-      !group.hasAttribute("zen-folder")
+      !group.hasAttribute("zen-folder") &&
+      !this.isLibraryGroupCopy(group)
     );
   }
 
@@ -2670,6 +2847,11 @@ class AdvancedTabGroups {
           (target.tagName === "tab-group" ? target : null)
         : null;
       if (!group) return;
+
+      // Library spaces-section copies fire this too; the section owns them.
+      if (this.isLibraryGroupCopy(group)) {
+        return;
+      }
 
       // Skip split-view-groups
       if (group.hasAttribute("split-view-group")) {
@@ -3488,7 +3670,9 @@ class AdvancedTabGroups {
   }
 
   syncGroupColorVars(group) {
-    if (!group?.id || group.hasAttribute("split-view-group")) {
+    // Section copies keep the vars they were cloned with; only real groups
+    // sync (their copies refresh via refreshSpacesSectionGroupIcon below).
+    if (!group?.id || group.hasAttribute("split-view-group") || this.isLibraryGroupCopy(group)) {
       return;
     }
 
@@ -3527,6 +3711,9 @@ class AdvancedTabGroups {
     if (stroke && !stroke.includes("gradient")) {
       colorTargets.forEach(target => target.style.setProperty("--tab-group-stroke", stroke));
     }
+
+    // Recolors don't rebuild cards; push the fresh vars into copies.
+    this.refreshSpacesSectionGroupIcon(group);
   }
 
   // Apply saved colors to tab groups

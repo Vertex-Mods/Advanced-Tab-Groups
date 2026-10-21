@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased - Library spaces-section group support
+
+- Tab groups now render in Zen Library spaces-section cards (every space, not just the active one). Workspace hiding moved from the `hidden` attribute to `atg-ws-hidden` scoped to real strips in CSS, since the section skips hidden nodes when copying rows.
+- Section group copies are excluded from ATG processing/tracking (no ATG buttons, menus, colors, or saved-state writes under copy ids) and never inherit workspace hiding.
+- ATG group icons (with colors) are mirrored into section copies and kept in sync on icon picks and recolors.
+
 ## 3.9.1 - 2026-10-20 - Arc-mode icon color/size + Tabler init gate
 
 - Arc-like group mode: the group icon now uses the same color as the group text (sidebar and Zen Library), instead of the default-mode stroke/black fill.

@@ -23,7 +23,7 @@
     "readme": "https://raw.githubusercontent.com/Vertex-Mods/Advanced-Tab-Groups/main/README.md",
     "image": "https://raw.githubusercontent.com/Vertex-Mods/Advanced-Tab-Groups/main/image.png",
     "author": "Vertex",
-    "version": "3.9.1",
+    "version": "3.9.2",
     "tags": [
         "Zen Browser",
         "Vertical Tabs",
@@ -32,7 +32,7 @@
         "12th"
     ],
     "createdAt": "2025-05-25",
-    "updatedAt": "2026-10-20",
+    "updatedAt": "2026-10-21",
     "ai": "yes",
     "fork": ["zen"]
 }

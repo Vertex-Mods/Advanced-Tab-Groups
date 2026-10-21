@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased - Library spaces-section group support
+## 3.9.2 - 2026-10-21 - Library spaces-section groups + Tabler pick fix
 
 - Tab groups now render in Zen Library spaces-section cards (every space, not just the active one). Workspace hiding moved from the `hidden` attribute to `atg-ws-hidden` scoped to real strips in CSS, since the section skips hidden nodes when copying rows.
 - Section group copies are excluded from ATG processing/tracking (no ATG buttons, menus, colors, or saved-state writes under copy ids) and never inherit workspace hiding.
 - ATG group icons (with colors) are mirrored into section copies and kept in sync on icon picks and recolors.
+- Fixed bundled Tabler (and upload-button) picks silently doing nothing: the pick session now settles before the picker panel hides, so the `popuphidden` fallback can no longer win the race and drop the value as a dismissal (no `.group-icon` was rendered).
 
 ## 3.9.1 - 2026-10-20 - Arc-mode icon color/size + Tabler init gate
 

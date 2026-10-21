@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.9.1 ======= */
+/* ======= v3.9.2 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.

@@ -275,6 +275,17 @@ tab-group:not([split-view-group]) {
         display: none !important;
       }
 
+      /* Same hover box as the create-folder button below so both
+         header buttons match in size. */
+      &:hover .tab-close-button {
+        display: flex !important;
+        visibility: visible !important;
+        width: 20px !important;
+        height: 20px !important;
+        padding: 4px !important;
+        -moz-window-dragging: no-drag !important;
+      }
+
       @media (-moz-pref("browser.tabs.groups.show-folder-button")) {
         &:hover .tab-group-folder-button {
           display: flex !important;
@@ -318,6 +329,14 @@ tab-group:not([split-view-group]) {
    header row like native tab/folder ghosts (no JS clone surgery). */
 tab-group[drag-image] > .tab-group-container,
 tab-group[drag-image] .tab-group-overflow-count-container {
+  display: none !important;
+}
+
+/* ATG workspace visibility (see updateGroupVisibility): real strips only.
+   The Library spaces section skips hidden nodes when copying rows into
+   space cards, so groups hide here via atg-ws-hidden instead of the hidden
+   attribute — cards then render groups for every space. */
+#tabbrowser-tabs:not(.zen-library-space-tabs) tab-group[atg-ws-hidden]:not([drag-image]) {
   display: none !important;
 }
 

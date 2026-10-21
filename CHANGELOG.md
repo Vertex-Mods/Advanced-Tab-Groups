@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.10.0 - 2026-10-21 - Arc-mode close button size parity
+
+- Arc-like group mode: the close (X) button now uses the same hover box as the create-folder button (20x20 with 4px padding), so both header buttons match in size.
+
 ## 3.9.2 - 2026-10-21 - Library spaces-section groups + Tabler pick fix
 
 - Tab groups now render in Zen Library spaces-section cards (every space, not just the active one). Workspace hiding moved from the `hidden` attribute to `atg-ws-hidden` scoped to real strips in CSS, since the section skips hidden nodes when copying rows.

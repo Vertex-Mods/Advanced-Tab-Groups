@@ -473,3 +473,60 @@ tab-group[drag-image] .tab-group-overflow-count-container {
 tab-group:not([split-view-group]) .tab-group-icon .group-icon {
   object-fit: contain !important;
 }
+
+/* Folder-style hover tab-search popup (browser.tabs.groups.hover-search,
+   off by default). Mirrors Zen folders' #zen-folder-tabs-popup styling;
+   row classes (.folders-tabs-list-item-*) are reused from native CSS. */
+#atg-group-tabs-popup {
+  --panel-padding: 0;
+  width: 250px;
+
+  & * {
+    max-width: -moz-available;
+  }
+
+  & .tabs-list-header {
+    display: flex;
+    flex-direction: row;
+    padding: 6px;
+    border-bottom: 1px solid color-mix(in srgb, currentColor, transparent 90%);
+  }
+
+  & #atg-group-tabs-list-search {
+    background-color: transparent;
+    border: none !important;
+    outline: none !important;
+    flex: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .zen-folder-tabs-list-search-icon {
+    width: var(--size-item-small);
+    height: var(--size-item-small);
+    margin: 10px 2px 10px 10px;
+    -moz-context-properties: fill;
+    fill: currentColor;
+    opacity: 0.7;
+  }
+
+  & .atg-group-tabs-list-scrollbox {
+    overflow: scroll;
+  }
+}
+
+#atg-group-tabs-list {
+  padding: 0 4px;
+  max-height: 263px;
+  overflow-y: auto;
+}
+
+#atg-group-tabs-search-no-results {
+  height: 100%;
+  align-items: center;
+  text-align: center;
+  padding: 2em 0;
+  justify-content: center;
+  max-width: calc(100% - 10px);
+  margin: 0 auto;
+}

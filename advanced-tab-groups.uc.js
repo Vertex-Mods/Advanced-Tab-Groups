@@ -82,6 +82,10 @@ class AdvancedTabGroups {
     // present) with custom upload support (fixes #156).
     this.setupIconPickerIntegration();
 
+    // Folder-style hover tab-search popup on collapsed groups (opt-in,
+    // off by default — see browser.tabs.groups.hover-search).
+    this.setupHoverSearchPopup();
+
     // Process existing groups
     this.processExistingGroups();
 
@@ -2383,6 +2387,10 @@ class AdvancedTabGroups {
     // Set up observer to track collapsed state changes
     this.setupGroupCollapsedObserver(group);
 
+    // Folder-style hover search popup (listeners are cheap; the pref gates
+    // at hover time so toggling needs no restart).
+    this.attachHoverSearch(group);
+
     this.syncGroupColorVars(group);
 
     // Update group visibility based on workspace (coalesced)
@@ -2472,6 +2480,398 @@ class AdvancedTabGroups {
       attributes: true,
       attributeFilter: ["collapsed"]
     });
+  }
+
+  // ---- Folder-style hover tab-search popup (opt-in) ----
+  // Mirrors Zen folders' hover stash popup (ZenFolders.mjs #groupInit /
+  // openTabsPopup): hovering a *collapsed* group header opens a searchable
+  // list of its hidden tabs; picking one expands the group and selects it.
+  // Gated by browser.tabs.groups.hover-search (off by default). Hover delay
+  // reuses zen.folders.search.hover-delay so it matches the native pacing.
+  isHoverSearchEnabled() {
+    try {
+      return Services.prefs.getBoolPref("browser.tabs.groups.hover-search", false);
+    } catch {
+      return false;
+    }
+  }
+
+  hoverSearchDelay() {
+    try {
+      return Math.max(0, Services.prefs.getIntPref("zen.folders.search.hover-delay", 1000));
+    } catch {
+      return 1000;
+    }
+  }
+
+  setupHoverSearchPopup() {
+    if (this._hoverSearchPopup) {
+      return;
+    }
+    try {
+      let popupSet = document.getElementById("mainPopupSet");
+      if (!popupSet) {
+        return;
+      }
+      if (document.getElementById("atg-group-tabs-popup")) {
+        this._hoverSearchPopup = document.getElementById("atg-group-tabs-popup");
+        return;
+      }
+      const frag = window.MozXULElement.parseXULToFragment(`
+        <panel id="atg-group-tabs-popup"
+            nonnativepopover="true"
+            type="arrow"
+            orient="vertical"
+            side="left"
+            consumeoutsideclicks="never">
+          <hbox class="tabs-list-header" flex="1">
+            <image class="zen-folder-tabs-list-search-icon" src="chrome://global/skin/icons/search-glass.svg"/>
+            <html:input id="atg-group-tabs-list-search" type="search" />
+          </hbox>
+          <scrollbox class="atg-group-tabs-list-scrollbox" flex="1">
+            <vbox id="atg-group-tabs-list"></vbox>
+            <hbox id="atg-group-tabs-search-no-results" hidden="true" flex="1">No tabs found</hbox>
+          </scrollbox>
+        </panel>
+      `);
+      popupSet.appendChild(frag);
+      const popup = document.getElementById("atg-group-tabs-popup");
+      if (!popup) {
+        return;
+      }
+      this._hoverSearchPopup = popup;
+
+      popup.addEventListener("mouseover", () => {
+        try {
+          clearTimeout(this._hoverSearchPopupTimer);
+        } catch (_) {}
+        this._hoverSearchPopupTimer = null;
+      });
+      popup.addEventListener("mouseout", () => {
+        try {
+          clearTimeout(this._hoverSearchPopupTimer);
+        } catch (_) {}
+        this._hoverSearchPopupTimer = setTimeout(() => {
+          try {
+            if (this._hoverSearchPopup?.matches(":hover")) {
+              return;
+            }
+            this._hoverSearchPopup?.hidePopup(true);
+          } catch (_) {}
+        }, 200);
+      });
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error setting up hover search popup:", error);
+    }
+  }
+
+  attachHoverSearch(group) {
+    try {
+      if (group._hoverSearchAdded) {
+        return;
+      }
+      group._hoverSearchAdded = true;
+      const labelContainer = group.querySelector(".tab-group-label-container");
+      if (!labelContainer) {
+        return;
+      }
+      labelContainer.addEventListener("mouseenter", event => {
+        try {
+          if (
+            !group.hasAttribute("collapsed") ||
+            !this.isHoverSearchEnabled() ||
+            gBrowser.tabContainer.hasAttribute("movingtab") ||
+            event.target?.classList?.contains("tab-reset-button") ||
+            document.documentElement.hasAttribute("zen-renaming-group") ||
+            document.documentElement.hasAttribute("zen-renaming-tab")
+          ) {
+            return;
+          }
+          try {
+            clearTimeout(this._hoverSearchTimer);
+          } catch (_) {}
+          this._hoverSearchTimer = setTimeout(() => {
+            try {
+              this.openGroupTabsPopup(group, labelContainer);
+            } catch (_) {}
+          }, this.hoverSearchDelay());
+        } catch (_) {}
+      });
+      labelContainer.addEventListener("mouseleave", () => {
+        try {
+          clearTimeout(this._hoverSearchTimer);
+        } catch (_) {}
+        this._hoverSearchTimer = null;
+        try {
+          if (!group.hasAttribute("collapsed")) {
+            return;
+          }
+          this._hoverSearchPopupTimer = setTimeout(() => {
+            try {
+              if (this._hoverSearchPopup?.matches(":hover") || labelContainer.matches(":hover")) {
+                return;
+              }
+              this._hoverSearchPopup?.hidePopup(true);
+            } catch (_) {}
+          }, 200);
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  // Tabs hidden by the collapsed group (the selected one stays visible, like
+  // native folders keep active tabs out of the stash list).
+  _hoverSearchCandidates(group) {
+    try {
+      return this.getGroupTabs(group).filter(tab => !tab.selected);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  _formatHoverRelativeTime(timestamp) {
+    try {
+      const now = Date.now();
+      const sec = Math.floor((now - timestamp) / 1000);
+      if (!(sec >= 0)) {
+        return "";
+      }
+      if (sec < 60) {
+        return "Just now";
+      }
+      const min = Math.floor(sec / 60);
+      if (min < 60) {
+        return `${min} minute${min === 1 ? "" : "s"} ago`;
+      }
+      const hour = Math.floor(min / 60);
+      if (hour < 24) {
+        return `${hour} hour${hour === 1 ? "" : "s"} ago`;
+      }
+      const day = Math.floor(hour / 24);
+      if (day < 30) {
+        return `${day} day${day === 1 ? "" : "s"} ago`;
+      }
+      const month = Math.floor(day / 30);
+      return `${month} month${month === 1 ? "" : "s"} ago`;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  _hoverSearchPopupOptions(count) {
+    let position = "topright topleft";
+    let xOffset = 10;
+    try {
+      const rightSide = gZenVerticalTabsManager?._prefsRightSide;
+      if (rightSide) {
+        position = "topleft topright";
+        xOffset = -10;
+      }
+    } catch (_) {}
+    const size = Math.min(Math.max(count, 1), 6) * 48;
+    return { position, x: xOffset, y: size / -2 };
+  }
+
+  openGroupTabsPopup(group, anchor) {
+    try {
+      if (
+        document.documentElement.getAttribute("zen-renaming-group") ||
+        (typeof gURLBar !== "undefined" && gURLBar?.focused)
+      ) {
+        return;
+      }
+      const popup = this._hoverSearchPopup ?? document.getElementById("atg-group-tabs-popup");
+      if (!popup || !group?.isConnected) {
+        return;
+      }
+      // Already open for this group: keep it.
+      if (popup.state === "open" && this._hoverSearchPopupGroup === group) {
+        return;
+      }
+      const candidates = this._hoverSearchCandidates(group);
+      if (!candidates.length) {
+        return;
+      }
+      this._hoverSearchPopupGroup = group;
+      try {
+        document.getElementById("atg-group-tabs-search-no-results").hidden = true;
+      } catch (_) {}
+      this._populateGroupTabsList(group, candidates);
+
+      const search = popup.querySelector("#atg-group-tabs-list-search");
+      const tabsList = popup.querySelector("#atg-group-tabs-list");
+      try {
+        search.value = "";
+        search.placeholder = `Search tabs in ${group.label || "group"}`;
+      } catch (_) {}
+
+      const noResults = document.getElementById("atg-group-tabs-search-no-results");
+      const onSearchInput = () => {
+        try {
+          const query = (search.value || "").toLowerCase();
+          let found = 0;
+          for (const item of tabsList.children) {
+            const hit = (item.getAttribute("data-label") || "").includes(query);
+            item.hidden = !hit;
+            if (hit) {
+              found++;
+            }
+          }
+          if (noResults) {
+            noResults.hidden = found > 0;
+          }
+        } catch (_) {}
+      };
+      search.addEventListener("input", onSearchInput);
+
+      const onKeyDown = event => {
+        try {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Tab") {
+            event.preventDefault();
+            const isUp = event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey);
+            const items = Array.from(tabsList.children).filter(item => !item.hidden);
+            if (!items.length) {
+              return;
+            }
+            let index = items.indexOf(tabsList.querySelector(".folders-tabs-list-item[selected]"));
+            index = isUp ? (index - 1 + items.length) % items.length : (index + 1) % items.length;
+            items.forEach(item => item.removeAttribute("selected"));
+            const targetItem = items[index];
+            targetItem.setAttribute("selected", "true");
+            targetItem.scrollIntoView({ block: "start", behavior: "smooth" });
+          } else if (event.key === "Enter") {
+            const highlighted = tabsList.querySelector(".folders-tabs-list-item[selected]");
+            if (highlighted) {
+              highlighted.click();
+            }
+          } else if (event.key === "Escape") {
+            try {
+              popup.hidePopup(true);
+            } catch (_) {}
+          }
+        } catch (_) {}
+      };
+      document.addEventListener("keydown", onKeyDown);
+
+      anchor.setAttribute("open", "true");
+      const handlePopupHidden = event => {
+        if (event.target !== popup) {
+          return;
+        }
+        try {
+          search.value = "";
+        } catch (_) {}
+        try {
+          anchor.removeAttribute("open");
+        } catch (_) {}
+        search.removeEventListener("input", onSearchInput);
+        document.removeEventListener("keydown", onKeyDown);
+        if (this._hoverSearchPopupGroup === group) {
+          this._hoverSearchPopupGroup = null;
+        }
+      };
+      popup.addEventListener("popuphidden", handlePopupHidden, { once: true });
+      popup.addEventListener(
+        "popupshown",
+        () => {
+          try {
+            search.focus();
+            search.select();
+          } catch (_) {}
+        },
+        { once: true }
+      );
+      popup.openPopup(anchor, this._hoverSearchPopupOptions(candidates.length));
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error opening group tabs popup:", error);
+    }
+  }
+
+  _populateGroupTabsList(group, candidates) {
+    const tabsList = this._hoverSearchPopup?.querySelector("#atg-group-tabs-list");
+    if (!tabsList) {
+      return;
+    }
+    tabsList.replaceChildren();
+    let defaultFavicon = "chrome://global/skin/icons/defaultFavicon.svg";
+    try {
+      defaultFavicon = PlacesUtils?.favicons?.defaultFavicon?.spec || defaultFavicon;
+    } catch (_) {}
+
+    for (const tab of candidates) {
+      try {
+        if (!gBrowser.isTab?.(tab) || tab.hasAttribute("zen-empty-tab")) {
+          continue;
+        }
+        const item = document.createElement("div");
+        item.className = "folders-tabs-list-item";
+
+        const content = document.createElement("div");
+        content.className = "folders-tabs-list-item-content";
+
+        const icon = document.createElement("img");
+        icon.className = "folders-tabs-list-item-icon";
+        let tabURL = "";
+        try {
+          tabURL = tab.linkedBrowser?.currentURI?.spec || "";
+        } catch (_) {}
+        let host = tabURL;
+        try {
+          host = new URL(tabURL).hostname || tabURL;
+        } catch (_) {}
+        const tabLabel = tab.label || "";
+        try {
+          icon.src = gBrowser.getIcon(tab) || defaultFavicon;
+        } catch (_) {
+          icon.src = defaultFavicon;
+        }
+
+        const labelsContainer = document.createElement("div");
+        labelsContainer.className = "folders-tabs-list-item-labels";
+
+        const mainLabel = document.createElement("div");
+        mainLabel.className = "folders-tabs-list-item-label";
+        mainLabel.textContent = tabLabel;
+
+        const secondaryLabel = document.createElement("div");
+        secondaryLabel.className = "tab-list-item-secondary-label";
+        const when = this._formatHoverRelativeTime(tab.lastAccessed);
+        secondaryLabel.textContent = when ? `${when} • ${group.label || ""}` : (group.label || "");
+
+        labelsContainer.append(mainLabel, secondaryLabel);
+        content.append(icon, labelsContainer);
+        item.append(content);
+
+        if (tab.selected) {
+          item.setAttribute("selected", "true");
+        }
+        item.setAttribute("data-label", `${tabLabel.toLowerCase()} ${tabURL.toLowerCase()}`);
+
+        item.addEventListener("click", () => {
+          try {
+            // The tab is stashed (hidden): expand first so the switch lands
+            // somewhere visible, then select.
+            if (group.hasAttribute("collapsed")) {
+              group.removeAttribute("collapsed");
+            }
+            gBrowser.selectedTab = tab;
+          } catch (_) {}
+          try {
+            this._hoverSearchPopup?.hidePopup(true);
+          } catch (_) {}
+        });
+        item.addEventListener("mouseenter", () => {
+          try {
+            for (const sibling of tabsList.children) {
+              sibling.removeAttribute("selected");
+            }
+            item.setAttribute("selected", "true");
+          } catch (_) {}
+        });
+
+        tabsList.appendChild(item);
+      } catch (_) {}
+    }
   }
 
   // Ensure a single, shared context menu exists and is wired up

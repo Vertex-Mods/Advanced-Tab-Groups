@@ -31,5 +31,10 @@
     "type": "checkbox",
     "label": "Make group headers look like Zen folders (folder icon, open/close animation, active dots)",
     "defaultValue": true
+  },
+  {
+    "property": "browser.tabs.groups.hover-search",
+    "type": "checkbox",
+    "label": "Show a folder-style hover search popup on collapsed groups (search and jump to stashed tabs)"
   }
 ]

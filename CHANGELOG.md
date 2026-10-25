@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.11.0 - 2026-10-25 - Performance pass: cached groups, coalesced updates, lazy Tabler
+
+- Cached the tab-group list + id map (invalidated on TabGroupCreate/Removed/Move and once per observer batch) so workspace switches and group loops no longer re-query the DOM per lookup.
+- Central `requestUpdateGroupVisibility()` (rAF + 100ms trailing) replaces all ad-hoc `setTimeout(50/100/500)` visibility callers; startup's 1000/1200/1500ms scatter is now one idle sweep.
+- Body observer batches mutation records to one rAF pass, skips deep scans for leaf nodes, and `waitForElm` now times out instead of leaking one body observer per missing id (plus fast paths for live groups).
+- Favicon mode is cheaper and gated: hidden-workspace groups keep their replayed saved color, sampling reuses one shared 16x16 canvas with stride sampling (max 12 favicons), and concurrent runs join instead of stacking.
+- Dragover hot path is rAF-throttled with a cached threshold (5s TTL) and no `querySelectorAll` fallback in the per-mousemove path.
+- Bundled Tabler pack no longer builds at startup: it builds lazily on first picker open or first `resource://atg-tabler/*` restore, and `applySavedIcons` skips the pack entirely when no saved icon needs it.
+- Startup polling cut: dependency wait uses `gZenWorkspaces.promiseInitialized` + slow 250ms fallback (8s cap), library and picker installs are event-driven with bounded retries.
+
 ## 3.10.0 - 2026-10-21 - Arc-mode close button size parity
 
 - Arc-like group mode: the close (X) button now uses the same hover box as the create-folder button (20x20 with 4px padding), so both header buttons match in size.

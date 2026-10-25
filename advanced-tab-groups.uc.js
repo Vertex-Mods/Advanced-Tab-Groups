@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.10.0 ======= */
+/* ======= v3.11.0 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -19,6 +19,21 @@ globalThis._advancedTabGroupsCssPath = (() => {
 class AdvancedTabGroups {
   #initTabGroupListener;
 
+  // ---- Perf: cached group list (see _rebuildTabGroupsCache) ----
+  _tabGroupsCache = null;
+  _tabGroupsById = null;
+  // Coalesced visibility-audit state (see requestUpdateGroupVisibility).
+  _visUpdateQueued = false;
+  _visUpdateTimer = null;
+  // Shared 16x16 scratch canvas for favicon sampling (see _useFaviconColor).
+  _faviconCanvas = null;
+  // Cached folder-dragover threshold with TTL (see getFolderDragoverThreshold).
+  _dragoverThreshold = null;
+  _dragoverThresholdAt = 0;
+  // rAF-throttled dragover state (see setupGroupDropTargeting).
+  _dragoverQueued = false;
+  _dragoverLastEvent = null;
+
   constructor() {
     this.init();
   }
@@ -27,16 +42,12 @@ class AdvancedTabGroups {
     // Wait for any dependencies before proceeding.
     await this.waitForDependencies();
 
-    // Start the bundled Tabler pack before any saved icons are handed to
-    // groups: an <image> pointing at resource://atg-tabler/* before its
-    // substitution is registered renders broken.
-    // applySavedIcons / applyGroupIcon additionally gate per icon URL
+    // NOTE: the bundled Tabler pack is NOT built here anymore. It used to
+    // load+hash the 1.6MB bundle at every startup; now it builds lazily on
+    // first picker open or first atg-tabler icon restore
+    // (see ensureAtgCustomIconsReady / applySavedIcons).
+    // applySavedIcons / applyGroupIcon gate per icon URL
     // (see ensureAtgCustomIconsReady).
-    try {
-      if (this.atgTablerAvailable()) {
-        this.setupAtgTablerPack();
-      }
-    } catch (_) {}
 
     // Load saved tab group settings
     this.applySavedColors();
@@ -48,6 +59,12 @@ class AdvancedTabGroups {
     this.setupObserver();
     this.setupDragAndDropSync();
     this.setupGroupDropTargeting();
+
+    // Keep the tabGroups cache coherent: any structural group event drops it
+    // (the body observer in setupObserver also invalidates per batch).
+    for (const evt of ["TabGroupCreate", "TabGroupRemoved", "TabMove"]) {
+      document.addEventListener(evt, () => this.invalidateTabGroupsCache(), true);
+    }
 
     // Add folder context menu item
     this.addFolderContextMenuItems();
@@ -68,12 +85,9 @@ class AdvancedTabGroups {
     // Process existing groups
     this.processExistingGroups();
 
-    // Also try again after a delay to catch any missed groups
-    setTimeout(() => this.processExistingGroups(), 1000);
-
-    // Apply saved collapsed states after groups are processed
-    setTimeout(() => this.applySavedParents(), 1200);
-    setTimeout(() => this.applySavedCollapsedStates(), 1500);
+    // One trailing sweep catches late-restored groups (replaces the old
+    // 1000/1200/1500ms scatter): a single idle pass instead of three timers.
+    this._scheduleIdleSweep();
 
     // Listen for tab group creation events from the platform component
     document.addEventListener(
@@ -91,6 +105,7 @@ class AdvancedTabGroups {
     // Zen fires this when a group empties, whatever closed it. Drop its persisted state here so
     // applySavedColors never waits (waitForElm observes the whole body) on an id that is gone.
     document.addEventListener("TabGroupRemoved", (event) => {
+      this.invalidateTabGroupsCache();
       const group = event.target;
       if (group?.localName === "tab-group" && !group.hasAttribute("split-view-group") && !this.isLibraryGroupCopy(group)) {
         this.removeSavedGroupState(group.id);
@@ -100,8 +115,142 @@ class AdvancedTabGroups {
     // Set up workspace change observer to update group visibility
     this.setupWorkspaceObserver();
 
-    // Initial update of group visibility
-    setTimeout(() => this.updateGroupVisibility(), 500);
+    // Initial update of group visibility (coalesced with the sweep above)
+    this.requestUpdateGroupVisibility();
+  }
+
+  // ---- Perf helpers: cache, coalesced visibility, idle scheduling ----
+
+  // Drop the cached group list; called on structural group events and by
+  // the body observer once per mutation batch.
+  invalidateTabGroupsCache() {
+    this._tabGroupsCache = null;
+    this._tabGroupsById = null;
+  }
+
+  _rebuildTabGroupsCache() {
+    let groups = [];
+    try {
+      groups = [
+        ...(Array.isArray(gBrowser.tabGroups) ? gBrowser.tabGroups : []),
+        ...document.querySelectorAll("tab-group"),
+      ];
+    } catch (_) {
+      groups = [];
+    }
+    const seen = new Set();
+    const list = [];
+    for (const group of groups) {
+      if (!group || seen.has(group)) {
+        continue;
+      }
+      seen.add(group);
+      if (
+        (group.localName === "tab-group" || group.tagName === "tab-group") &&
+        !this.isLibraryGroupCopy(group)
+      ) {
+        list.push(group);
+      }
+    }
+    this._tabGroupsCache = list;
+    const byId = new Map();
+    for (const group of list) {
+      if (group?.id && !byId.has(group.id)) {
+        byId.set(group.id, group);
+      }
+    }
+    this._tabGroupsById = byId;
+  }
+
+  // Central coalesced visibility audit: every caller funnels here instead of
+  // its own setTimeout(50/100/500). At most one rAF + one 100ms trailing
+  // pass is ever pending, so workspace switches and bulk rebuilds audit once.
+  requestUpdateGroupVisibility() {
+    if (this._visUpdateQueued) {
+      return;
+    }
+    this._visUpdateQueued = true;
+    const run = () => {
+      this._visUpdateQueued = false;
+      this._visUpdateTimer = null;
+      try {
+        this.updateGroupVisibility();
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error updating group visibility:", error);
+      }
+    };
+    const scheduleTrailing = () => {
+      if (this._visUpdateTimer) {
+        clearTimeout(this._visUpdateTimer);
+      }
+      this._visUpdateTimer = setTimeout(run, 100);
+    };
+    try {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(scheduleTrailing);
+      } else {
+        scheduleTrailing();
+      }
+    } catch (_) {
+      scheduleTrailing();
+    }
+  }
+
+  // Idle helper: requestIdleCallback when available, setTimeout fallback.
+  _runIdle(fn, timeout = 2000) {
+    try {
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(
+          () => {
+            try {
+              fn();
+            } catch (_) {}
+          },
+          { timeout }
+        );
+        return;
+      }
+    } catch (_) {}
+    setTimeout(() => {
+      try {
+        fn();
+      } catch (_) {}
+    }, 0);
+  }
+
+  // Single trailing sweep for late-restored groups (session restore, Zen
+  // workspace init): one idle pass instead of the old timer scatter.
+  _scheduleIdleSweep() {
+    this._runIdle(
+      () => {
+        try {
+          this.processExistingGroups();
+          this.applySavedParents();
+          if (!this.isArcMode()) {
+            this.applySavedCollapsedStates();
+          }
+        } catch (_) {}
+        this.requestUpdateGroupVisibility();
+      },
+      3000
+    );
+  }
+
+  // Favicon resampling is gated to the visible workspace: hidden groups keep
+  // their replayed saved color (see applySavedColor) instead of re-scanning.
+  _isGroupInActiveWorkspace(group) {
+    try {
+      const strip = gZenWorkspaces?.activeWorkspaceStrip;
+      if (!strip || !group?.isConnected) {
+        return true;
+      }
+      if (typeof strip.contains === "function") {
+        return strip.contains(group);
+      }
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   setupZenLibraryIntegration() {
@@ -409,13 +558,46 @@ class AdvancedTabGroups {
       return;
     }
 
+    // Event-driven first: the library host lands in the DOM when opened.
+    // A slow 1s fallback poll (30 tries) replaces the old 500ms x120 churn.
+    let settled = false;
+    const finish = ok => {
+      if (settled && ok) {
+        return;
+      }
+      if (ok) {
+        settled = true;
+      }
+      try {
+        libObserver?.disconnect();
+      } catch (_) {}
+      try {
+        clearInterval(interval);
+      } catch (_) {}
+    };
+    const libObserver = new MutationObserver(() => {
+      try {
+        if (document.querySelector("zen-library")) {
+          if (patchZenLibrary()) {
+            finish(true);
+          }
+        }
+      } catch (_) {}
+    });
+    try {
+      libObserver.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {}
     let attempts = 0;
     const interval = setInterval(() => {
       attempts += 1;
-      if (patchZenLibrary() || attempts >= 120) {
-        clearInterval(interval);
+      try {
+        if (patchZenLibrary() || attempts >= 30) {
+          finish(attempts < 30);
+        }
+      } catch (_) {
+        finish(false);
       }
-    }, 500);
+    }, 1000);
   }
 
   // ---- Zen Library spaces-section cards (per-space strips) ----
@@ -548,46 +730,118 @@ class AdvancedTabGroups {
   }
 
   setupObserver() {
+    // Batched: mutation records accumulate into one rAF pass so bulk
+    // rebuilds process each group once and invalidate the cache once.
+    // Deep querySelectorAll is skipped for leaf nodes (tabs, images) that
+    // can never contain a tab-group.
+    let pendingGroups = new Set();
+    let pendingSpacesSync = false;
+    let pendingBuiltinMenuSweep = false;
+    let observerQueued = false;
+    const flush = () => {
+      observerQueued = false;
+      try {
+        if (pendingBuiltinMenuSweep) {
+          pendingBuiltinMenuSweep = false;
+          try {
+            this.removeBuiltinTabGroupMenu();
+          } catch (_) {}
+        }
+        if (pendingGroups.size) {
+          const groups = Array.from(pendingGroups);
+          pendingGroups = new Set();
+          this.invalidateTabGroupsCache();
+          for (const group of groups) {
+            try {
+              if (group?.isConnected && !group.hasAttribute("split-view-group")) {
+                this.processGroup(group);
+              }
+            } catch (_) {}
+          }
+        } else {
+          pendingGroups = new Set();
+        }
+        if (pendingSpacesSync) {
+          pendingSpacesSync = false;
+          try {
+            this.queueSpacesSectionSync();
+          } catch (_) {}
+        }
+      } catch (_) {}
+    };
+    const queueFlush = () => {
+      if (observerQueued) {
+        return;
+      }
+      observerQueued = true;
+      try {
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(flush);
+        } else {
+          setTimeout(flush, 0);
+        }
+      } catch (_) {
+        setTimeout(flush, 0);
+      }
+    };
     const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeType === Node.ELEMENT_NODE) {
-              // Proactively remove Firefox built-in tab group editor menu if it appears
-              if (
-                node.id === "tab-group-editor" ||
-                node.nodeName?.toLowerCase() === "tabgroup-meu" ||
-                node.querySelector?.("#tab-group-editor, tabgroup-meu")
-              ) {
-                this.removeBuiltinTabGroupMenu(node);
-              }
-              // Check if the added node is a tab-group
-              if (node.tagName === "tab-group") {
-                // Skip split-view-groups
-                if (!node.hasAttribute("split-view-group")) {
-                  this.processGroup(node);
-                }
-              }
-              // Check if any children are tab-groups
-              const childGroups = node.querySelectorAll?.("tab-group") || [];
-              childGroups.forEach((group) => {
+      for (const mutation of mutations) {
+        if (mutation.type !== "childList" || mutation.addedNodes.length === 0) {
+          continue;
+        }
+        for (const node of mutation.addedNodes) {
+          if (node?.nodeType !== Node.ELEMENT_NODE) {
+            continue;
+          }
+          // Proactively remove Firefox built-in tab group editor menu if it appears
+          if (
+            node.id === "tab-group-editor" ||
+            node.nodeName?.toLowerCase() === "tabgroup-meu" ||
+            node.querySelector?.("#tab-group-editor, tabgroup-meu")
+          ) {
+            pendingBuiltinMenuSweep = true;
+          }
+          // Check if the added node is a tab-group
+          if (node.tagName === "tab-group") {
+            // Skip split-view-groups
+            if (!node.hasAttribute("split-view-group")) {
+              pendingGroups.add(node);
+            }
+          } else if (
+            node.querySelectorAll &&
+            node.localName !== "tab" &&
+            node.localName !== "image" &&
+            node.localName !== "img"
+          ) {
+            // Check if any children are tab-groups (leaves can't contain any)
+            let childGroups = null;
+            try {
+              childGroups = node.querySelectorAll("tab-group");
+            } catch (_) {
+              childGroups = null;
+            }
+            if (childGroups?.length) {
+              for (const group of childGroups) {
                 // Skip split-view-groups
                 if (!group.hasAttribute("split-view-group")) {
-                  this.processGroup(group);
+                  pendingGroups.add(group);
                 }
-              });
-              // Library spaces-section cards rebuild wholesale (and their
-              // group copies connect as live elements) — sync ATG copy icons.
-              if (
-                node.matches?.("zen-library-spaces-section, .zen-library-space-tabs, tab-group") ||
-                node.querySelector?.("zen-library-spaces-section, .zen-library-space-tabs")
-              ) {
-                this.queueSpacesSectionSync();
               }
             }
-          });
+          }
+          // Library spaces-section cards rebuild wholesale (and their
+          // group copies connect as live elements) — sync ATG copy icons.
+          if (
+            node.matches?.("zen-library-spaces-section, .zen-library-space-tabs, tab-group") ||
+            node.querySelector?.("zen-library-spaces-section, .zen-library-space-tabs")
+          ) {
+            pendingSpacesSync = true;
+          }
         }
-      });
+      }
+      if (pendingGroups.size || pendingSpacesSync || pendingBuiltinMenuSweep) {
+        queueFlush();
+      }
     });
 
     observer.observe(document.body, {
@@ -596,45 +850,109 @@ class AdvancedTabGroups {
     });
   }
 
-  waitForElm(selector) {
+  waitForElm(selector, timeoutMs = 10000) {
     return new Promise(resolve => {
-      const el = document.querySelector(selector);
-      if (el) {
-        return resolve(el);
-      }
-    
-      const observer = new MutationObserver(() => {
+      let settled = false;
+      let timer = null;
+      let observer = null;
+      const finish = value => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          observer?.disconnect();
+        } catch (_) {}
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve(value);
+      };
+      try {
         const el = document.querySelector(selector);
         if (el) {
-          observer.disconnect();
-          resolve(el);
+          return finish(el);
+        }
+      } catch (_) {
+        return finish(null);
+      }
+
+      observer = new MutationObserver(() => {
+        let el = null;
+        try {
+          el = document.querySelector(selector);
+        } catch (_) {
+          finish(null);
+          return;
+        }
+        if (el) {
+          finish(el);
         }
       });
-    
+
       observer.observe(document.body, {
         childList: true,
         subtree: true
       });
+      // Never leave a body observer behind for an id that is gone
+      // (e.g. a group closed before its saved color applied).
+      timer = setTimeout(() => finish(document.querySelector(selector) ?? null), timeoutMs);
     });
   }
 
   waitForDependencies() {
     return new Promise((resolve) => {
-      const id = setInterval(() => {
-        const deps = ["SessionStore", "gZenWorkspaces", "gZenThemePicker"]
-        
-        let depsExist = true;
-        for (const dep of deps) {
-          if (!window.hasOwnProperty(dep)) {
-            depsExist = false;
-          }
-        }
+      const deps = ["SessionStore", "gZenWorkspaces", "gZenThemePicker"];
 
-        if (depsExist) {
-          clearInterval(id);
-          resolve();
+      const ready = () => {
+        try {
+          return deps.every(dep => window.hasOwnProperty(dep));
+        } catch (_) {
+          return false;
         }
-      }, 50);
+      };
+
+      if (ready()) {
+        resolve();
+        return;
+      }
+
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        try {
+          clearInterval(id);
+        } catch (_) {}
+        try {
+          clearTimeout(cap);
+        } catch (_) {}
+        resolve();
+      };
+
+      // Event-based: Zen signals workspace init; fall back to a slow poll
+      // (250ms, not 50ms) and never hang init longer than ~8s.
+      const id = setInterval(() => {
+        if (ready()) {
+          finish();
+          return;
+        }
+        try {
+          if (window.gZenWorkspaces?.promiseInitialized && !this._waitedOnWorkspaces) {
+            this._waitedOnWorkspaces = true;
+            Promise.resolve(window.gZenWorkspaces.promiseInitialized)
+              .then(() => {
+                if (ready()) {
+                  finish();
+                }
+              })
+              .catch(() => {});
+          }
+        } catch (_) {}
+      }, 250);
+      const cap = setTimeout(finish, 8000);
     });
   }
 
@@ -644,14 +962,14 @@ class AdvancedTabGroups {
     const originalSwitchToWorkspace = window.gZenWorkspaces.switchToWorkspace;
     window.gZenWorkspaces.switchToWorkspace = (...args) => {
       const result = originalSwitchToWorkspace.apply(window.gZenWorkspaces, args);
-      // Update group visibility after workspace switch
-      setTimeout(() => this.updateGroupVisibility(), 100);
+      // Update group visibility after workspace switch (coalesced)
+      this.requestUpdateGroupVisibility();
       return result;
     };
-  
+
     // Also listen for workspace strip changes
     const workspaceObserver = new MutationObserver(() => {
-      setTimeout(() => this.updateGroupVisibility(), 100);
+      this.requestUpdateGroupVisibility();
     });
   
     // Observe changes to the workspace container
@@ -741,19 +1059,47 @@ class AdvancedTabGroups {
       return;
     }
     this._iconPickerIntegrated = true;
+    // Bounded backoff (400ms x10) plus an element observer: the old version
+    // retried every 400ms forever when the picker never materialized.
+    let attempts = 0;
+    let pickerObserver = null;
+    const cleanup = () => {
+      try {
+        pickerObserver?.disconnect();
+      } catch (_) {}
+      pickerObserver = null;
+    };
     const tryInstall = () => {
       try {
         const picker = window.gZenEmojiPicker;
         const panel = document.getElementById("PanelUI-zen-emojis-picker");
         if (!picker || !panel || typeof picker.open !== "function") {
-          setTimeout(tryInstall, 400);
+          attempts += 1;
+          if (attempts < 10) {
+            setTimeout(tryInstall, 400 * attempts);
+          } else {
+            cleanup();
+          }
           return;
         }
+        cleanup();
         this.enhanceEmojiPickerPanel(panel);
       } catch (error) {
         console.error("[AdvancedTabGroups] Error setting up icon picker:", error);
       }
     };
+    try {
+      pickerObserver = new MutationObserver(() => {
+        try {
+          if (window.gZenEmojiPicker && document.getElementById("PanelUI-zen-emojis-picker")) {
+            tryInstall();
+          }
+        } catch (_) {}
+      });
+      pickerObserver.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {
+      pickerObserver = null;
+    }
     tryInstall();
   }
 
@@ -887,8 +1233,9 @@ class AdvancedTabGroups {
     try {
       this.addHeaderUploadButton(panel);
       // Bundled Tabler only when zia-extended-icons isn't providing its own.
+      // The pack itself builds lazily on first ATG pick (see popupshowing
+      // below) or first atg-tabler icon restore — never at startup.
       if (this.atgTablerAvailable()) {
-        this.setupAtgTablerPack();
         this.addAtgTablerTab(panel);
       }
       // The Tabler tab lives in the shared tab strip, so gate it per open:
@@ -901,6 +1248,11 @@ class AdvancedTabGroups {
             if (el) {
               el.hidden = !active;
             }
+          }
+          // First real pick kicks off the lazy pack build; the redraw hook
+          // (atgTablerRedrawPackIcons) fixes the tab's images once ready.
+          if (active && this.atgTablerAvailable()) {
+            this.ensureAtgCustomIconsReady();
           }
         } catch (_) {}
         this.syncUploadButtonGeometry();
@@ -1814,18 +2166,21 @@ class AdvancedTabGroups {
   }
 
   get tabGroups() {
-    const groups = [
-      ...(Array.isArray(gBrowser.tabGroups) ? gBrowser.tabGroups : []),
-      ...document.querySelectorAll("tab-group"),
-    ];
-    return Array.from(new Set(groups)).filter(group =>
-      (group.localName === "tab-group" || group.tagName === "tab-group") &&
-      !this.isLibraryGroupCopy(group)
-    );
+    if (!this._tabGroupsCache) {
+      this._rebuildTabGroupsCache();
+    }
+    // Return a copy: callers iterate freely without mutating the cache.
+    return this._tabGroupsCache.slice();
   }
 
   getGroupById(groupId) {
-    return this.tabGroups.find(group => group.id === groupId);
+    if (!groupId) {
+      return undefined;
+    }
+    if (!this._tabGroupsCache) {
+      this._rebuildTabGroupsCache();
+    }
+    return this._tabGroupsById.get(groupId);
   }
 
   processExistingGroups() {
@@ -2030,18 +2385,21 @@ class AdvancedTabGroups {
 
     this.syncGroupColorVars(group);
 
-    // Update group visibility based on workspace
-    setTimeout(() => this.updateGroupVisibility(), 50);
+    // Update group visibility based on workspace (coalesced)
+    this.requestUpdateGroupVisibility();
   }
 
   // Set up observer to automatically update group color when tabs change
+  // Debounced 500ms and idle-scheduled: favicon resampling never runs inside
+  // the mutation callback itself, and hidden-workspace groups are skipped
+  // (they keep their replayed saved color until visible).
   setupGroupColorObserver(group) {
     if (group._colorObserverAdded) return;
     group._colorObserverAdded = true;
 
     // Debounce the color update to avoid too many updates
     let updateTimeout = null;
-    
+
     const observer = new MutationObserver((mutations) => {
       // Check if tabs were actually added or removed
       const hasChanges = mutations.some(mutation => {
@@ -2049,18 +2407,28 @@ class AdvancedTabGroups {
         const removedNodes = Array.from(mutation.removedNodes);
         return addedNodes.length > 0 || removedNodes.length > 0;
       });
-      
+
       if (!hasChanges) return;
-      
+
       // Debounce: wait 500ms after the last change before updating
       if (updateTimeout) {
         clearTimeout(updateTimeout);
       }
-      
+
       updateTimeout = setTimeout(() => {
+        updateTimeout = null;
         // Update color when tabs are added or removed
         if (typeof group._useFaviconColor === "function" && group.color.endsWith("favicon")) {
-          group._useFaviconColor();
+          if (!group.isConnected || !this._isGroupInActiveWorkspace(group)) {
+            return;
+          }
+          this._runIdle(() => {
+            try {
+              if (group.isConnected) {
+                group._useFaviconColor();
+              }
+            } catch (_) {}
+          }, 1500);
         }
       }, 500);
     });
@@ -2317,7 +2685,7 @@ class AdvancedTabGroups {
       }
 
       document.querySelector("zen-library")?.update?.(true);
-      setTimeout(() => this.updateGroupVisibility(), 50);
+      this.requestUpdateGroupVisibility();
       return true;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error nesting group:", error);
@@ -2352,7 +2720,7 @@ class AdvancedTabGroups {
       }
 
       document.querySelector("zen-library")?.update?.(true);
-      setTimeout(() => this.updateGroupVisibility(), 50);
+      this.requestUpdateGroupVisibility();
       return true;
     } catch (error) {
       console.error("[AdvancedTabGroups] Error moving group to top level:", error);
@@ -2461,23 +2829,58 @@ class AdvancedTabGroups {
     // the header's zen-drop-target class per pointer position: edges remove it
     // (native falls back to reorder math + line indicator), middle restores it
     // (native shows background highlight + drop-into). Restored on drop/end.
+    // rAF-throttled: dragover fires per mousemove, so coalesce to one
+    // updateGroupHeaderDropZone per frame instead of one per event.
     document.addEventListener("dragover", event => {
-      this.updateGroupHeaderDropZone(event);
+      this._dragoverLastEvent = event;
+      if (this._dragoverQueued) {
+        return;
+      }
+      this._dragoverQueued = true;
+      const run = () => {
+        this._dragoverQueued = false;
+        const evt = this._dragoverLastEvent;
+        this._dragoverLastEvent = null;
+        if (evt) {
+          try {
+            this.updateGroupHeaderDropZone(evt);
+          } catch (_) {}
+        }
+      };
+      try {
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(run);
+        } else {
+          setTimeout(run, 0);
+        }
+      } catch (_) {
+        setTimeout(run, 0);
+      }
     }, true);
     for (const endEvent of ["drop", "dragend", "dragleave"]) {
       document.addEventListener(endEvent, () => {
+        this._dragoverQueued = false;
+        this._dragoverLastEvent = null;
         this.restoreGroupHeaderDropZones();
       }, true);
     }
   }
 
   getFolderDragoverThreshold() {
+    // Pref read per mousemove showed up in drag profiles: cache with a 5s
+    // TTL (still picks up live pref changes within a drag).
     try {
+      const now = Date.now();
+      if (this._dragoverThreshold !== null && now - this._dragoverThresholdAt < 5000) {
+        return this._dragoverThreshold;
+      }
       const raw = Services.prefs.getIntPref(
         "zen.tabs.folder-dragover-threshold-percent",
         20
       );
-      return Math.min(0.45, Math.max(0.05, raw / 100));
+      this._dragoverThreshold = Math.min(0.45, Math.max(0.05, raw / 100));
+      this._dragoverThresholdAt = now;
+      return this._dragoverThreshold;
     } catch {
       return 0.2;
     }
@@ -2511,9 +2914,16 @@ class AdvancedTabGroups {
       }
       const threshold = this.getFolderDragoverThreshold();
       const overlap = (event.clientY - rect.top) / rect.height;
-      const childCount = group.childGroupsAndTabs?.length ??
-        group.querySelectorAll?.(":scope > .tab-group-container > tab, :scope > .tab-group-container > tab-group").length ??
-        0;
+      // Hot path: prefer the native childGroupsAndTabs count; the
+      // querySelectorAll fallback only runs where native is missing.
+      let childCount = 0;
+      try {
+        childCount = group.childGroupsAndTabs?.length ??
+          group.querySelector?.(":scope > .tab-group-container")?.childElementCount ??
+          0;
+      } catch (_) {
+        childCount = 0;
+      }
       const isEdge = overlap < threshold ||
         (overlap > 1 - threshold &&
           (group.collapsed || group.hasAttribute("collapsed") || childCount < 2));
@@ -2734,8 +3144,7 @@ class AdvancedTabGroups {
         window.gZenWorkspaces.changeWorkspace(targetWorkspace);
       }
 
-      this.updateGroupVisibility();
-      setTimeout(() => this.updateGroupVisibility(), 100);
+      this.requestUpdateGroupVisibility();
     } catch (error) {
       console.error("[AdvancedTabGroups] Error moving group to space:", error);
     }
@@ -2872,6 +3281,8 @@ class AdvancedTabGroups {
       if (!group.hasAttribute("data-close-button-added")) {
         this.processGroup(group);
       }
+      // Membership changed: drop the cached list so getGroupById sees it.
+      this.invalidateTabGroupsCache();
 
       // Auto-start rename and apply favicon color when newly created
       if (
@@ -2885,12 +3296,16 @@ class AdvancedTabGroups {
         // Set color to favicon mode (default for new groups)
         group.color = `${group.id}-favicon`;
         if (typeof group._useFaviconColor === "function") {
-          setTimeout(() => group._useFaviconColor(), 300);
+          setTimeout(() => {
+            try {
+              group._useFaviconColor();
+            } catch (_) {}
+          }, 300);
         }
       }
 
-      // Update group visibility
-      setTimeout(() => this.updateGroupVisibility(), 100);
+      // Update group visibility (coalesced)
+      this.requestUpdateGroupVisibility();
     } catch (e) {
       console.error("[AdvancedTabGroups] Error handling TabGroupCreate:", e);
     }
@@ -3222,18 +3637,47 @@ class AdvancedTabGroups {
       // Capture 'this' for use in callbacks
       const self = this;
 
+      // Serialize concurrent runs per group: a tab burst used to stack N
+      // full favicon scans; now late callers join the in-flight one.
+      if (group._faviconPromise) {
+        return group._faviconPromise;
+      }
+      const run = (async () => {
       try {
-        // Get all favicon images directly from the group
-        const favicons = group.querySelectorAll(".tab-icon-image");
+        // Hidden-workspace groups keep their replayed saved color instead of
+        // rescanning favicons they can't even show (see applySavedColor).
+        if (!self._isGroupInActiveWorkspace(group)) {
+          return null;
+        }
+        // Get favicon images directly from the group (cap: one scan of a
+        // 20-tab group used to decode 20 full-size images sequentially).
+        let faviconEls = [];
+        try {
+          faviconEls = Array.from(group.querySelectorAll(".tab-icon-image")).slice(0, 12);
+        } catch (_) {
+          faviconEls = [];
+        }
 
         // Extract colors from favicons
         const colors = [];
 
-        for (const [index, favicon] of Array.from(favicons).entries()) {
+        // One shared 16x16 scratch canvas: downscale-draw + stride-sample
+        // instead of a fresh full-size canvas + per-pixel loop per favicon.
+        let scratch = self._faviconCanvas;
+        if (!scratch) {
+          try {
+            scratch = document.createElement("canvas");
+            scratch.width = 16;
+            scratch.height = 16;
+            self._faviconCanvas = scratch;
+          } catch (_) {
+            scratch = null;
+          }
+        }
+        const scratchCtx = scratch?.getContext("2d", { willReadFrequently: true }) ?? null;
+
+        for (const favicon of faviconEls) {
           if (favicon && favicon.src && favicon.src !== "chrome://global/skin/icons/defaultFavicon.svg") {
-            // Create a canvas to analyze the favicon
-            const canvas = document.createElement("canvas");
-            const ctx = canvas.getContext("2d");
             const img = new Image();
 
             // Set crossOrigin to handle CORS issues
@@ -3244,24 +3688,26 @@ class AdvancedTabGroups {
 
             img.onload = () => {
               try {
-                canvas.width = img.width || 16;
-                canvas.height = img.height || 16;
-                ctx.drawImage(img, 0, 0);
+                let data = null;
+                if (scratch && scratchCtx) {
+                  scratchCtx.clearRect(0, 0, 16, 16);
+                  scratchCtx.drawImage(img, 0, 0, 16, 16);
+                  data = scratchCtx.getImageData(0, 0, 16, 16).data;
+                } else {
+                  const canvas = document.createElement("canvas");
+                  canvas.width = 16;
+                  canvas.height = 16;
+                  const ctx = canvas.getContext("2d");
+                  ctx.drawImage(img, 0, 0, 16, 16);
+                  data = ctx.getImageData(0, 0, 16, 16).data;
+                }
 
-                const imageData = ctx.getImageData(
-                  0,
-                  0,
-                  canvas.width,
-                  canvas.height
-                );
-                const data = imageData.data;
-
-                // Sample pixels and extract colors
+                // Stride-sample every 4th pixel of the 16x16 thumbnail.
                 let r = 0,
                   g = 0,
                   b = 0,
                   count = 0;
-                for (let i = 0; i < data.length; i += 4) {
+                for (let i = 0; i < data.length; i += 16) {
                   // Skip transparent pixels and very dark pixels
                   if (
                     data[i + 3] > 128 &&
@@ -3287,22 +3733,25 @@ class AdvancedTabGroups {
               } catch (error) {
                 console.error(
                   "[AdvancedTabGroups] Error processing favicon",
-                  index + 1,
+                  favicon.src,
                   ":",
                   error
                 );
+                processedResolve(true);
               }
             };
 
             img.onerror = () => {
-              console.warn("[AdvancedTabGroups] Failed to load favicon:", favicon.src);
               processedResolve(true);
             };
 
             // Add timeout to prevent hanging
             setTimeout(() => {
-              if (img.complete === false) {
-                console.warn("[AdvancedTabGroups] Favicon load timeout:", favicon.src);
+              try {
+                if (img.complete === false) {
+                  processedResolve(true);
+                }
+              } catch (_) {
                 processedResolve(true);
               }
             }, 3000);
@@ -3314,11 +3763,15 @@ class AdvancedTabGroups {
         };
 
         if (colors.length > 0) {
-          this.getGroupById(group.id).color = `${group.id}-favicon`;
+          const live = self.getGroupById(group.id) ?? (group.isConnected ? group : null);
+          if (!live) {
+            return null;
+          }
+          live.color = `${group.id}-favicon`;
 
           const finalColor = self._calculateAverageColor(colors);
           const colorString = `rgb(${finalColor[0]}, ${finalColor[1]}, ${finalColor[2]})`;
-        
+
           document.documentElement.style.setProperty(`--tab-group-color-${group.id}-favicon`, colorString);
           document.documentElement.style.setProperty(
             `--tab-group-color-${group.id}-favicon-invert`,
@@ -3328,8 +3781,8 @@ class AdvancedTabGroups {
           document.documentElement.style.removeProperty(`--tab-group-color-${group.id}`);
           document.documentElement.style.removeProperty(`--tab-group-color-${group.id}-invert`);
           self.syncGroupColorVars(group);
-        
-          this.updateIconColor(group, finalColor);
+
+          self.updateIconColor(group, finalColor);
           // Persist the result: on restart the favicons are not all loaded yet, so recomputing then
           // gives a different average. applySavedColors replays this and processGroup skips the recompute.
           const savedColors = self.savedColors;
@@ -3338,11 +3791,22 @@ class AdvancedTabGroups {
 
           return finalColor;
         }
+        return null;
       } catch (error) {
         console.error(
           "[AdvancedTabGroups] Error extracting favicon colors:",
           error
         );
+        return null;
+      }
+      })();
+      group._faviconPromise = run;
+      try {
+        return await run;
+      } finally {
+        if (group._faviconPromise === run) {
+          group._faviconPromise = null;
+        }
       }
     };
   }
@@ -3736,6 +4200,29 @@ class AdvancedTabGroups {
     }
   }
 
+  // Fast path for an already-live group (cached map); only groups that
+  // haven't been created yet wait on the body observer (which now times
+  // out instead of leaking one observer per missing id).
+  _liveGroupById(groupId) {
+    try {
+      const cached = this.getGroupById(groupId);
+      if (cached?.isConnected) {
+        return cached;
+      }
+    } catch (_) {}
+    try {
+      const escaped = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(groupId) : groupId;
+      const el = document.querySelector(`tab-group[id="${escaped}"]`);
+      if (el?.isConnected && !this.isLibraryGroupCopy(el)) {
+        this.invalidateTabGroupsCache();
+        return el;
+      }
+      return el ?? null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // Apply one savedColors entry: a gradient-picker object, a persisted favicon colour
   // ({ favicon: "rgb(...)" }) or, for backward compatibility, a plain colour string.
   async applySavedColor(groupId, color) {
@@ -3751,7 +4238,7 @@ class AdvancedTabGroups {
 
       gZenThemePicker.currentOpacity = previousOpacity;
 
-      const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+      const group = this._liveGroupById(groupId) ?? await this.waitForElm(`tab-group[id="${groupId}"]`);
       if (group) {
         this.syncGroupColorVars(group);
       }
@@ -3767,7 +4254,7 @@ class AdvancedTabGroups {
     else if (typeof color === 'object' && typeof color.favicon === 'string' && color.favicon) {
       root.setProperty(`--tab-group-color-${groupId}-favicon`, color.favicon);
       root.setProperty(`--tab-group-color-${groupId}-favicon-invert`, color.favicon);
-      const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+      const group = this._liveGroupById(groupId) ?? await this.waitForElm(`tab-group[id="${groupId}"]`);
       if (group) {
         // Another mod may have coloured it natively while we waited; that wins (see syncGroupColorVars)
         if (this.hasNativeColor(group)) {
@@ -3784,7 +4271,7 @@ class AdvancedTabGroups {
     else if (typeof color === 'string' && color.trim() !== '') {
       root.setProperty(`--tab-group-color-${groupId}`, color);
       root.setProperty(`--tab-group-color-${groupId}-invert`, color);
-      const group = await this.waitForElm(`tab-group[id="${groupId}"]`);
+      const group = this._liveGroupById(groupId) ?? await this.waitForElm(`tab-group[id="${groupId}"]`);
       if (group) {
         this.syncGroupColorVars(group);
       }
@@ -3996,7 +4483,14 @@ class AdvancedTabGroups {
   }
 
   async applyGroupIcon(group, iconUrl = null) {
-    const iconContainer = await this.waitForElm(`tab-group[id="${group.id}"] .tab-group-icon-container`);
+    const live = this._liveGroupById(group.id) ?? group;
+    let iconContainer = live.querySelector?.(".tab-group-icon-container") ?? null;
+    if (!iconContainer) {
+      iconContainer = await this.waitForElm(`tab-group[id="${group.id}"] .tab-group-icon-container`);
+    }
+    if (!iconContainer) {
+      return;
+    }
     let iconElement = iconContainer.querySelector(".tab-group-icon");
     if (!iconElement) {
       iconElement = document.createElement("div");
@@ -4062,13 +4556,17 @@ class AdvancedTabGroups {
     this.persistGroupIcon(group, iconUrl);
   }
 
-  // Apply saved icons to tab groups. The bundled Tabler pack is awaited
-  // first so resource://atg-tabler/* icons are never handed to groups
-  // before their host exists (each icon is gated again in applyGroupIcon).
+  // Apply saved icons to tab groups. The bundled Tabler pack builds lazily:
+  // only awaited here when a saved icon actually needs resource://atg-tabler/*
+  // (each icon is gated again in applyGroupIcon).
   async applySavedIcons() {
     try {
-      await this.ensureAtgCustomIconsReady();
-      Object.entries(this.savedIcons).forEach(([groupId, iconUrl]) => {
+      const icons = this.savedIcons;
+      const needsPack = Object.values(icons).some(url => this.isAtgTablerIconUrl(url));
+      if (needsPack) {
+        await this.ensureAtgCustomIconsReady();
+      }
+      Object.entries(icons).forEach(([groupId, iconUrl]) => {
         try {
           const group = this.getGroupById(groupId);
           if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
@@ -4144,16 +4642,22 @@ class AdvancedTabGroups {
       const states = this.savedCollapsedStates;
       Object.entries(states).forEach(([groupId, isCollapsed]) => {
         if (isCollapsed) {
-          // Use waitForElm to handle groups that might not be ready yet
-          this.waitForElm(`tab-group[id="${groupId}"]`).then(group => {
+          // Fast path for live groups; only not-yet-created ones wait.
+          const live = this._liveGroupById(groupId);
+          const applyTo = group => {
             if (group && !group.hasAttribute("split-view-group")) {
               if (this.isArcMode()) { group.removeAttribute("collapsed"); return; }
               group.setAttribute("collapsed", "true");
               console.log(`[AdvancedTabGroups] Applied collapsed state to group ${groupId}`);
             }
-          }).catch(error => {
-            console.warn(`[AdvancedTabGroups] Group ${groupId} not found for collapsed state restoration:`, error);
-          });
+          };
+          if (live) {
+            applyTo(live);
+          } else {
+            this.waitForElm(`tab-group[id="${groupId}"]`).then(applyTo).catch(error => {
+              console.warn(`[AdvancedTabGroups] Group ${groupId} not found for collapsed state restoration:`, error);
+            });
+          }
         }
       });
     } catch (error) {

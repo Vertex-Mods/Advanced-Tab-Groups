@@ -48,6 +48,7 @@ class AdvancedTabGroups {
     this.setupObserver();
     this.setupDragAndDropSync();
     this.setupGroupDropTargeting();
+    this.setupGroupDragImageAnchor();
 
     // Add folder context menu item
     this.addFolderContextMenuItems();
@@ -2370,6 +2371,8 @@ class AdvancedTabGroups {
     // Zen's ZenDragAndDrop.startTabDrag() owns the drag ghost
     // (#createDragImageForTabs). A second setDragImage from the mod races
     // native and causes the wrong size/offset that felt non-native.
+    // (setupGroupDragImageAnchor only re-anchors native's own ghost for
+    // groups, synchronously inside startTabDrag, so it cannot race.)
     // Hierarchy persistence only observes the real DOM moves native makes.
     const scheduleSync = () => this.scheduleSavedParentsSync();
     const syncEvents = [
@@ -2416,6 +2419,63 @@ class AdvancedTabGroups {
       subtree: true,
     });
     this._dragAndDropSyncObserver = observer;
+  }
+
+  setupGroupDragImageAnchor() {
+    if (this._groupDragImageAnchorAdded) {
+      return;
+    }
+    this._groupDragImageAnchorAdded = true;
+
+    // A non-folder <tab-group> is `display: contents`, so it has no box of its
+    // own. ZenDragAndDrop.startTabDrag() measures the dragged group for the
+    // native ghost, gets a 0x0 rect at the window origin, and sizes the ghost
+    // wrapper and the cursor offset from it: on macOS the ghost then slides in
+    // from the window's top-left instead of appearing under the cursor.
+    //
+    // Re-anchor native's own ghost on the header row, synchronously right after
+    // native set it in the same startTabDrag call. Same element, last call wins
+    // deterministically, so this does not race native (see the NOTE in
+    // setupDragAndDropSync). Zen folders have a real box and are left alone.
+    const proto = window.ZenDragAndDrop?.prototype;
+    const nativeStartTabDrag = proto?.startTabDrag;
+    if (typeof nativeStartTabDrag !== "function") {
+      console.warn(
+        "[AdvancedTabGroups] ZenDragAndDrop.startTabDrag missing — group drag ghost anchoring skipped on this Zen version."
+      );
+      return;
+    }
+
+    proto.startTabDrag = function (event, tab, ...args) {
+      const result = nativeStartTabDrag.call(this, event, tab, ...args);
+      try {
+        const group = gBrowser.isTabGroupLabel(tab) ? tab.group : null;
+        const [dragImage] = this.originalDragImageArgs ?? [];
+        if (
+          !dragImage ||
+          !group ||
+          group.isZenFolder ||
+          group.hasAttribute("split-view-group") ||
+          args[0]?.dragImageSource
+        ) {
+          return result;
+        }
+        const rect = window.windowUtils.getBoundsWithoutFlushing(
+          group.labelContainerElement
+        );
+        dragImage.style.width = `${rect.width}px`;
+        dragImage.style.height = `${rect.height}px`;
+        this.originalDragImageArgs = [
+          dragImage,
+          event.clientX - rect.left,
+          event.clientY - rect.top,
+        ];
+        event.dataTransfer.setDragImage(...this.originalDragImageArgs);
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error anchoring group drag ghost:", error);
+      }
+      return result;
+    };
   }
 
   setupGroupDropTargeting() {

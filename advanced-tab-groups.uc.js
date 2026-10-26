@@ -51,6 +51,9 @@ class AdvancedTabGroups {
     // window sync makes in this window on behalf of another one.
     this.setupMoveVisibilitySync();
 
+    // Keep ungrouping and tab order inside groups in step across windows.
+    this.setupWindowSyncGroupRemoveAndOrder();
+
     // Set up observer for all tab groups
     this.setupObserver();
     this.setupDragAndDropSync();
@@ -742,6 +745,212 @@ class AdvancedTabGroups {
       }
       return undefined;
     };
+  }
+
+  // Synced windows the shared ZenWindowSync object mirrors into, except this one.
+  otherSyncedWindows() {
+    const sync = window.gZenWindowSync;
+    const result = [];
+    if (!sync) {
+      return result;
+    }
+    for (const win of Services.wm.getEnumerator("navigator:browser")) {
+      if (
+        win === window ||
+        win.closed ||
+        win._zenClosingWindow ||
+        win.gZenWindowSync !== sync ||
+        win.gZenWorkspaces?.privateWindowOrDisabled ||
+        win.document.documentElement.hasAttribute("zen-unsynced-window")
+      ) {
+        continue;
+      }
+      result.push(win);
+    }
+    return result;
+  }
+
+  // Two more gaps in ZenWindowSync's handling of plain groups:
+  //
+  // 1. Ungrouping closed tabs in other windows. Firefox ungroups last-to-first
+  //    and sync replays each move later, placing each tab next to its final
+  //    neighbour - which in the other window is often still inside the group.
+  //    Sync then handles TabGroupRemoved with removeTabGroup(), which CLOSES
+  //    every tab still in the group. Fix: before that, move any tabs left in
+  //    the group out, in the source window's order, so nothing is closed.
+  //
+  // 2. Tab order inside groups drifted between windows (sync places a group's
+  //    first tab "after the group's first tab", a rule meant for Zen folders,
+  //    which always start with a placeholder tab). Fix: shortly after a group
+  //    change made in this window, line up the order in other windows.
+  //    Moves that sync applies here on another window's behalf are marked
+  //    (__atgApplyingFrom) and ignored, so windows never push competing orders.
+  setupWindowSyncGroupRemoveAndOrder() {
+    const sync = window.gZenWindowSync;
+    if (!sync) {
+      return;
+    }
+
+    if (!sync.__atgMoveFlagPatched && typeof sync.on_TabMove === "function") {
+      sync.__atgMoveFlagPatched = true;
+      const originalMove = sync.on_TabMove;
+      sync.on_TabMove = function (aEvent) {
+        const previous = this.__atgApplyingFrom;
+        this.__atgApplyingFrom = aEvent?.target?.documentGlobal || previous;
+        try {
+          return originalMove.call(this, aEvent);
+        } finally {
+          this.__atgApplyingFrom = previous;
+        }
+      };
+    }
+
+    if (
+      !sync.__atgGroupRemovePatched &&
+      typeof sync.on_TabGroupRemoved === "function"
+    ) {
+      sync.__atgGroupRemovePatched = true;
+      const originalRemoved = sync.on_TabGroupRemoved;
+      sync.on_TabGroupRemoved = function (aEvent) {
+        const group = aEvent?.target;
+        const sourceWindow = group?.documentGlobal;
+        const isPlainGroup =
+          group &&
+          !group.isZenFolder &&
+          !group.hasAttribute?.("split-view-group") &&
+          !!group.id &&
+          !!sourceWindow?.document;
+        if (isPlainGroup) {
+          const sourceDoc = sourceWindow.document;
+          const positionInSource = tab =>
+            sourceDoc.getElementById(tab.id)?._tPos ?? Number.MAX_SAFE_INTEGER;
+          const previous = this.__atgApplyingFrom;
+          this.__atgApplyingFrom = sourceWindow;
+          try {
+            for (const win of Services.wm.getEnumerator("navigator:browser")) {
+              if (win === sourceWindow || win.closed || win.gZenWindowSync !== this) {
+                continue;
+              }
+              const doc = win.document;
+              const mirrored = doc.getElementById(group.id);
+              if (!mirrored || mirrored.isZenFolder) {
+                continue;
+              }
+              const leftInside = Array.from(mirrored.tabs || [])
+                .filter(tab => win.gBrowser.isTab(tab) && !tab.hasAttribute("zen-empty-tab"))
+                .sort((a, b) => positionInSource(a) - positionInSource(b));
+              for (const tab of leftInside) {
+                // Go right after the nearest earlier neighbour (in the source
+                // window) whose copy here is already outside the group.
+                let anchor = null;
+                const sourceTab = sourceDoc.getElementById(tab.id);
+                for (let prev = sourceTab?.previousElementSibling; prev; prev = prev.previousElementSibling) {
+                  if (!prev.id) {
+                    continue;
+                  }
+                  const copy = doc.getElementById(prev.id);
+                  if (copy && copy !== mirrored && !mirrored.contains(copy)) {
+                    anchor = copy;
+                    break;
+                  }
+                }
+                try {
+                  win.gBrowser.zenHandleTabMove(tab, () => {
+                    if (anchor) {
+                      anchor.after(tab);
+                    } else {
+                      mirrored.before(tab);
+                    }
+                  });
+                } catch (error) {
+                  console.error("[AdvancedTabGroups] Could not ungroup a tab in another window:", error);
+                }
+              }
+            }
+          } finally {
+            this.__atgApplyingFrom = previous;
+          }
+        }
+        // The group is empty in every window now, so removing it closes nothing.
+        return originalRemoved.call(this, aEvent);
+      };
+    }
+
+    let timer = null;
+    const schedule = () => {
+      const applying = window.gZenWindowSync?.__atgApplyingFrom;
+      if (applying && applying !== window) {
+        return; // moved here by window sync on another window's behalf
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => this.reconcileGroupOrderToOtherWindows(), 400);
+    };
+    for (const eventName of ["TabMove", "TabGroupMoved", "TabGroupCreate", "TabGrouped"]) {
+      window.addEventListener(eventName, schedule, true);
+    }
+  }
+
+  // Make every other window's copy of each plain group hold the same tabs in
+  // the same order as this window's.
+  reconcileGroupOrderToOtherWindows() {
+    const sync = window.gZenWindowSync;
+    if (!sync) {
+      return;
+    }
+    const groups = Array.from(gBrowser.tabGroups || []).filter(
+      group =>
+        group.isConnected &&
+        group.id &&
+        !group.isZenFolder &&
+        !group.hasAttribute("split-view-group") &&
+        // Leave nested groups and groups holding split views to Zen.
+        !group.querySelector("tab-group, [split-view-group]")
+    );
+    if (!groups.length) {
+      return;
+    }
+    for (const win of this.otherSyncedWindows()) {
+      const doc = win.document;
+      for (const group of groups) {
+        const mirrored = doc.getElementById(group.id);
+        if (!mirrored || mirrored.isZenFolder) {
+          continue;
+        }
+        const ids = Array.from(group.tabs || [])
+          .filter(tab => !tab.hasAttribute("zen-empty-tab"))
+          .map(tab => tab.id);
+        const mirroredIds = Array.from(mirrored.tabs || [])
+          .filter(tab => !tab.hasAttribute("zen-empty-tab"))
+          .map(tab => tab.id);
+        if (ids.join("|") === mirroredIds.join("|")) {
+          continue;
+        }
+        const start =
+          mirrored.groupStartElement || mirrored.querySelector(".zen-tab-group-start");
+        if (!start) {
+          continue;
+        }
+        const previous = sync.__atgApplyingFrom;
+        sync.__atgApplyingFrom = window;
+        try {
+          let anchor = start;
+          for (const id of ids) {
+            const tab = doc.getElementById(id);
+            if (!tab || !win.gBrowser.isTab(tab)) {
+              continue;
+            }
+            if (anchor.nextElementSibling !== tab) {
+              win.gBrowser.zenHandleTabMove(tab, () => anchor.after(tab));
+            }
+            anchor = tab;
+          }
+        } catch (error) {
+          console.error("[AdvancedTabGroups] Could not reorder a group in another window:", error);
+        } finally {
+          sync.__atgApplyingFrom = previous;
+        }
+      }
+    }
   }
 
   // Group visibility (atg-ws-hidden) used to be refreshed only on Space

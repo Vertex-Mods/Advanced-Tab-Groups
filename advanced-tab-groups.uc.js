@@ -47,6 +47,10 @@ class AdvancedTabGroups {
     // Make new groups appear in every synced window (see method for why).
     this.setupWindowSyncGroupCreate();
 
+    // Re-check which groups to show after any move, including moves that
+    // window sync makes in this window on behalf of another one.
+    this.setupMoveVisibilitySync();
+
     // Set up observer for all tab groups
     this.setupObserver();
     this.setupDragAndDropSync();
@@ -738,6 +742,32 @@ class AdvancedTabGroups {
       }
       return undefined;
     };
+  }
+
+  // Group visibility (atg-ws-hidden) used to be refreshed only on Space
+  // switches and ATG's own actions. When window sync moves a group into the
+  // Space this window is showing, nothing refreshed it, so the group stayed
+  // hidden until you switched Space away and back. Window sync moves things
+  // here through Firefox's tab-move handling, which fires TabMove /
+  // TabGroupMoved in this window too, so refresh (debounced) on those.
+  setupMoveVisibilitySync() {
+    if (this._moveVisibilitySyncAdded) {
+      return;
+    }
+    this._moveVisibilitySyncAdded = true;
+    let pending = null;
+    const schedule = () => {
+      if (pending) {
+        return;
+      }
+      pending = setTimeout(() => {
+        pending = null;
+        this.updateGroupVisibility();
+      }, 50);
+    };
+    for (const eventName of ["TabGroupMoved", "TabMove", "TabGroupCreate"]) {
+      window.addEventListener(eventName, schedule, true);
+    }
   }
 
   // Set up observer for workspace changes to update group visibility

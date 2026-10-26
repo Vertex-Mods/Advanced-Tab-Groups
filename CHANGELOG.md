@@ -2,6 +2,7 @@
 
 ## Unreleased - group drag ghost anchoring
 
+- New groups now appear in every open window. Zen's window sync tries to mirror a new plain tab group with `gBrowser.addTabGroup([])`, which Zen's patched `addTabGroup` can't do (it throws without `insertBefore` and removes empty groups), so groups never reached other windows and were lost on restart when several windows were open. ATG now replaces window sync's `on_TabGroupCreate` for plain groups only, building the group in each other window from that window's copies of the same tabs. Zen folders and split views are untouched.
 - Move group to Space now syncs across windows. The group is moved as a single tracked move (`gBrowser.zenHandleTabMove`), so Zen's window sync receives `TabMove` for each tab and `TabGroupMoved` for the group. Previously each tab was moved out of the group (synced) and the group and tabs were then moved back with plain DOM inserts (not synced), so other windows got loose tabs, and with several windows open the group was lost on restart (tabs restored ungrouped).
 - Dragging a tab group no longer makes the drag ghost slide in from the window's top-left on macOS. A non-folder `tab-group` is `display: contents`, so Zen measured it as a 0x0 box at the window origin when building the native ghost; ATG now re-anchors native's own ghost on the header row (size and cursor offset) right after Zen sets it, in the same `startTabDrag` call. Zen folders are unaffected.
 

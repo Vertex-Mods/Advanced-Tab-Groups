@@ -44,6 +44,9 @@ class AdvancedTabGroups {
     this.applySavedParents();
     this.applySavedCollapsedStates();
 
+    // Make new groups appear in every synced window (see method for why).
+    this.setupWindowSyncGroupCreate();
+
     // Set up observer for all tab groups
     this.setupObserver();
     this.setupDragAndDropSync();
@@ -637,6 +640,104 @@ class AdvancedTabGroups {
         }
       }, 50);
     });
+  }
+
+  // Zen turns Firefox tab groups off by default (browser.tabs.groups.enabled),
+  // and ZenWindowSync's mirroring of a new plain group doesn't work: it calls
+  // gBrowser.addTabGroup([]) in the other windows, which Zen's patched
+  // addTabGroup can't do (no insertBefore -> throws; an empty group is removed
+  // straight away). So a group made in one window never appears in the
+  // others, and with several windows open it's lost on restart (tabs come
+  // back ungrouped).
+  //
+  // ZenWindowSync is one shared object; it dispatches each event to
+  // this["on_" + type], so we replace on_TabGroupCreate for plain groups only.
+  // By the time sync handles the event (asynchronously), the new group
+  // already holds its tabs, so each other window builds the same group from
+  // its own copies of those tabs - the supported way to create a group in Zen.
+  // Folders and split views keep Zen's original handling.
+  setupWindowSyncGroupCreate() {
+    const sync = window.gZenWindowSync;
+    if (
+      !sync ||
+      typeof sync.on_TabGroupCreate !== "function" ||
+      sync.__atgGroupCreatePatched
+    ) {
+      return;
+    }
+    sync.__atgGroupCreatePatched = true;
+    const original = sync.on_TabGroupCreate;
+
+    sync.on_TabGroupCreate = function (aEvent) {
+      const group = aEvent?.target;
+      const sourceWindow = group?.documentGlobal;
+      const isPlainGroup =
+        group?.tagName === "tab-group" &&
+        !group.isZenFolder &&
+        !group.hasAttribute("split-view-group") &&
+        !group.alreadySynced &&
+        !!group.id &&
+        !!sourceWindow?.gBrowser;
+      if (!isPlainGroup) {
+        return original.call(this, aEvent);
+      }
+
+      const tabs = Array.from(group.tabs || []).filter(
+        tab => !tab.hasAttribute("zen-empty-tab")
+      );
+      if (!tabs.length) {
+        return original.call(this, aEvent);
+      }
+
+      for (const win of Services.wm.getEnumerator("navigator:browser")) {
+        if (
+          win === sourceWindow ||
+          win.closed ||
+          win._zenClosingWindow ||
+          win.gZenWindowSync !== this ||
+          win.gZenWorkspaces?.privateWindowOrDisabled ||
+          win.document.documentElement.hasAttribute("zen-unsynced-window") ||
+          win.document.getElementById(group.id)
+        ) {
+          continue;
+        }
+        const winTabs = tabs
+          .map(tab => win.document.getElementById(tab.id))
+          .filter(tab => tab && win.gBrowser.isTab(tab));
+        if (!winTabs.length) {
+          continue;
+        }
+        try {
+          // Lets ATG in that window know this group is a copy, so it doesn't
+          // open the rename box or reset the colour there.
+          win.__atgMirroringGroupId = group.id;
+          const mirrored = win.gBrowser.addTabGroup(winTabs, {
+            id: group.id,
+            label: group.label || "",
+            color: group.color,
+            insertBefore: winTabs[0],
+          });
+          if (mirrored) {
+            mirrored.alreadySynced = true;
+            const workspaceId = group.getAttribute("zen-workspace-id");
+            if (workspaceId) {
+              mirrored.setAttribute("zen-workspace-id", workspaceId);
+            }
+            if (group.collapsed) {
+              mirrored.collapsed = true;
+            }
+          }
+        } catch (error) {
+          console.error(
+            "[AdvancedTabGroups] Could not create the new group in another window:",
+            error
+          );
+        } finally {
+          delete win.__atgMirroringGroupId;
+        }
+      }
+      return undefined;
+    };
   }
 
   // Set up observer for workspace changes to update group visibility
@@ -2956,6 +3057,13 @@ class AdvancedTabGroups {
       // Ensure group gets processed (buttons/context menu) if not already
       if (!group.hasAttribute("data-close-button-added")) {
         this.processGroup(group);
+      }
+
+      // A copy of a group created in another window (window sync): keep its
+      // label and colour, and don't open the rename box in this window.
+      if (window.__atgMirroringGroupId && window.__atgMirroringGroupId === group.id) {
+        setTimeout(() => this.updateGroupVisibility(), 100);
+        return;
       }
 
       // Auto-start rename and apply favicon color when newly created

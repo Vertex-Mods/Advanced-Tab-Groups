@@ -2754,7 +2754,8 @@ class AdvancedTabGroups {
 
   moveGroupToWorkspace(group, workspaceId) {
     try {
-      if (!group || !workspaceId || !window.gZenWorkspaces) {
+      const ws = window.gZenWorkspaces;
+      if (!group || !workspaceId || !ws) {
         return;
       }
 
@@ -2763,35 +2764,59 @@ class AdvancedTabGroups {
         return;
       }
 
-      const targetWorkspace = window.gZenWorkspaces.getWorkspaceFromId?.(
-        workspaceId
-      );
-      const targetElement = window.gZenWorkspaces.workspaceElement?.(
-        workspaceId
-      );
+      const targetWorkspace = ws.getWorkspaceFromId?.(workspaceId);
+      const targetElement = ws.workspaceElement?.(workspaceId);
       const targetContainer =
         targetElement?.tabsContainer ||
         targetElement?.querySelector?.(".zen-workspace-normal-tabs-section");
-
-      for (const tab of tabs) {
-        window.gZenWorkspaces.moveTabToWorkspace?.(tab, workspaceId);
-        tab.setAttribute("zen-workspace-id", workspaceId);
+      if (!targetContainer || !group.isConnected) {
+        return;
       }
 
-      group.setAttribute("zen-workspace-id", workspaceId);
-      if (targetContainer && group.isConnected) {
-        const periphery = targetContainer.querySelector(
-          "#tabbrowser-arrowscrollbox-periphery"
-        );
+      const periphery = targetContainer.querySelector(
+        "#tabbrowser-arrowscrollbox-periphery"
+      );
+      const oldWorkspaceId = this.getGroupWorkspaceId(group);
+      const firstIndexBefore = tabs[0].index;
+
+      // Move the group as ONE tracked move. Firefox's tab-move handling
+      // (wrapped by gBrowser.zenHandleTabMove) fires TabMove for every tab in
+      // the group - Zen counts a Space change as a move - and TabGroupMoved for
+      // the group. ZenWindowSync listens for exactly those, so every other
+      // window gets the same group in the same Space.
+      // Previously each tab was moved out of the group via moveTabToWorkspace
+      // (synced), then the group and tabs were moved back with plain DOM
+      // inserts (not synced), leaving other windows with loose tabs and the
+      // group lost on restart when several windows were open.
+      gBrowser.zenHandleTabMove(group, () => {
+        group.setAttribute("zen-workspace-id", workspaceId);
+        for (const tab of tabs) {
+          tab.setAttribute("zen-workspace-id", workspaceId);
+        }
         targetContainer.insertBefore(group, periphery || null);
+      });
+
+      // Firefox only fires TabGroupMoved when the group's tab index changed.
+      // Moving to a neighbouring Space can leave the index the same, so make
+      // sure window sync still hears about the group moving.
+      if (tabs[0].index === firstIndexBefore) {
+        group.dispatchEvent(new CustomEvent("TabGroupMoved", { bubbles: true }));
       }
-      this.restoreGroupTabsAfterWorkspaceMove(group, tabs);
+
+      // Same bookkeeping as Zen's own moveTabsToWorkspace.
+      if (
+        oldWorkspaceId &&
+        tabs.includes(ws.lastSelectedWorkspaceTabs?.[oldWorkspaceId])
+      ) {
+        delete ws.lastSelectedWorkspaceTabs[oldWorkspaceId];
+      }
+
       this.processGroup(group);
 
       if (targetWorkspace && tabs.some(tab => tab.selected)) {
-        window.gZenWorkspaces.lastSelectedWorkspaceTabs[workspaceId] =
+        ws.lastSelectedWorkspaceTabs[workspaceId] =
           tabs.find(tab => tab.selected) || tabs[0];
-        window.gZenWorkspaces.changeWorkspace(targetWorkspace);
+        ws.changeWorkspace(targetWorkspace);
       }
 
       this.updateGroupVisibility();

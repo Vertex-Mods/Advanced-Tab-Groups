@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased - group drag ghost anchoring
+
+- Dragging a tab group no longer makes the drag ghost slide in from the window's top-left on macOS. A non-folder `tab-group` is `display: contents`, so Zen measured it as a 0x0 box at the window origin when building the native ghost; ATG now re-anchors native's own ghost on the header row (size and cursor offset) right after Zen sets it, in the same `startTabDrag` call. Zen folders are unaffected.
+
 ## 3.10.0 - 2026-10-21 - Arc-mode close button size parity
 
 - Arc-like group mode: the close (X) button now uses the same hover box as the create-folder button (20x20 with 4px padding), so both header buttons match in size.

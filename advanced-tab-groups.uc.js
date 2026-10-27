@@ -916,13 +916,20 @@ class AdvancedTabGroups {
       clearTimeout(timer);
       timer = setTimeout(() => this.reconcileGroupOrderToOtherWindows(), 400);
     };
-    for (const eventName of ["TabMove", "TabGroupMoved", "TabGroupCreate", "TabGrouped"]) {
+    for (const eventName of [
+      "TabMove",
+      "TabGroupMoved",
+      "TabGroupCreate",
+      "TabGrouped",
+      "TabGroupUpdate",
+    ]) {
       window.addEventListener(eventName, schedule, true);
     }
   }
 
-  // Make every other window's copy of each plain group hold the same tabs in
-  // the same order as this window's.
+  // Make every other window's copy of each plain group match this window's:
+  // same name (some renames weren't reaching or redrawing in other windows
+  // until a Space switch), and the same tabs in the same order.
   reconcileGroupOrderToOtherWindows() {
     const sync = window.gZenWindowSync;
     if (!sync) {
@@ -933,9 +940,7 @@ class AdvancedTabGroups {
         group.isConnected &&
         group.id &&
         !group.isZenFolder &&
-        !group.hasAttribute("split-view-group") &&
-        // Leave nested groups and groups holding split views to Zen.
-        !group.querySelector("tab-group, [split-view-group]")
+        !group.hasAttribute("split-view-group")
     );
     if (!groups.length) {
       return;
@@ -945,6 +950,32 @@ class AdvancedTabGroups {
       for (const group of groups) {
         const mirrored = doc.getElementById(group.id);
         if (!mirrored || mirrored.isZenFolder) {
+          continue;
+        }
+
+        // Name: copy it, and redraw the visible label.
+        const name = group.label || "";
+        const shown = name || "\u200b";
+        const previousFlag = sync.__atgApplyingFrom;
+        sync.__atgApplyingFrom = window;
+        try {
+          if ((mirrored.label || "") !== name) {
+            mirrored.label = name;
+          }
+          const labelElement = mirrored.querySelector(
+            ":scope > .tab-group-label-container .tab-group-label"
+          );
+          if (labelElement && labelElement.textContent !== shown) {
+            labelElement.textContent = shown;
+          }
+        } catch (error) {
+          console.error("[AdvancedTabGroups] Could not update a group name in another window:", error);
+        } finally {
+          sync.__atgApplyingFrom = previousFlag;
+        }
+
+        // Order: leave nested groups and groups holding split views to Zen.
+        if (group.querySelector("tab-group, [split-view-group]")) {
           continue;
         }
         const ids = Array.from(group.tabs || [])

@@ -54,6 +54,9 @@ class AdvancedTabGroups {
     // Keep ungrouping and tab order inside groups in step across windows.
     this.setupWindowSyncGroupRemoveAndOrder();
 
+    // List each synced group once (this window's copy) in group menus.
+    this.setupDedupeSyncedGroups();
+
     // Set up observer for all tab groups
     this.setupObserver();
     this.setupDragAndDropSync();
@@ -744,6 +747,34 @@ class AdvancedTabGroups {
         }
       }
       return undefined;
+    };
+  }
+
+  // gBrowser.getAllTabGroups() returns the groups of EVERY window, and window
+  // sync gives each window its own copy of a group (same id). So "Add tab to
+  // group" listed each group once per window - and picking another window's
+  // copy makes Firefox adopt the tab into that window. Keep this window's copy
+  // of any group it has; groups that only exist elsewhere still appear once.
+  setupDedupeSyncedGroups() {
+    const original = gBrowser.getAllTabGroups;
+    if (typeof original !== "function" || gBrowser.__atgAllGroupsPatched) {
+      return;
+    }
+    gBrowser.__atgAllGroupsPatched = true;
+    gBrowser.getAllTabGroups = function (...args) {
+      const all = original.apply(this, args) || [];
+      const local = new Set(Array.from(this.tabGroups || []).map(group => group.id));
+      const seen = new Set();
+      return all.filter(group => {
+        if (group.documentGlobal !== window && local.has(group.id)) {
+          return false; // this window's own copy is listed instead
+        }
+        if (seen.has(group.id)) {
+          return false;
+        }
+        seen.add(group.id);
+        return true;
+      });
     };
   }
 

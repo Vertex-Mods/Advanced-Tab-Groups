@@ -2,6 +2,7 @@
 
 ## Unreleased - group drag ghost anchoring
 
+- "Add tab to group" lists each group once. `gBrowser.getAllTabGroups()` returns every window's groups, and window sync gives each window its own copy, so groups appeared once per window, and picking another window's copy made Firefox move the tab into that window. ATG now keeps this window's copy of any group it has.
 - Ungrouping no longer closes tabs in other windows. Window sync replays ungroup moves against each tab's final neighbour, which in other windows is often still inside the group, then handles `TabGroupRemoved` with `removeTabGroup()`, closing every tab left inside. ATG now moves any remaining tabs out (in the source window's order) before the group is removed.
 - Tab order inside groups now matches across windows. Shortly after a group change made in a window, ATG lines up the order in other windows; moves that window sync applies on another window's behalf are marked and ignored, so windows never push competing orders.
 - A group moved into the Space another window is showing now appears there straight away. Group visibility was only refreshed on Space switches and ATG's own actions; it's now also refreshed (debounced) on `TabMove`, `TabGroupMoved` and `TabGroupCreate`, which fire in every window when window sync mirrors a move.

@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.11.0 ======= */
+/* ======= v3.11.1 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -1037,8 +1037,21 @@ class AdvancedTabGroups {
         }
         try {
           // Lets ATG in that window know this group is a copy, so it doesn't
-          // open the rename box or reset the colour there.
+          // open the rename box or reset the colour there. The pending
+          // icon/colour ride along so the copy renders ATG state too (and
+          // persists it for the next restart) - read by onTabGroupCreate in
+          // that window, where ambient document/window are correct.
           win.__atgMirroringGroupId = group.id;
+          try {
+            const srcAtg = sourceWindow?.advancedTabGroups;
+            const iconUrl = srcAtg?.savedIcons?.[group.id] ?? null;
+            const colorVal = srcAtg?.savedColors?.[group.id];
+            if (iconUrl || colorVal !== undefined) {
+              win.__atgMirrorIcon = { id: group.id, iconUrl: iconUrl || null, colorVal };
+            } else {
+              delete win.__atgMirrorIcon;
+            }
+          } catch (_) {}
           const mirrored = win.gBrowser.addTabGroup(winTabs, {
             id: group.id,
             label: group.label || "",
@@ -1062,6 +1075,7 @@ class AdvancedTabGroups {
           );
         } finally {
           delete win.__atgMirroringGroupId;
+          delete win.__atgMirrorIcon;
         }
       }
       return undefined;
@@ -2862,6 +2876,13 @@ class AdvancedTabGroups {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         if (mutation.type === "attributes" && mutation.attributeName === "collapsed") {
+          // Drag-temporary collapse (see setupGroupDragImageAnchor): don't
+          // fight it in Arc mode and don't persist it.
+          try {
+            if (this._atgDragCollapsedGroup === group) {
+              return;
+            }
+          } catch (_) {}
           if (this.isArcMode() && group.hasAttribute("collapsed")) {
             try { group.removeAttribute("collapsed"); } catch {}
             return;
@@ -3207,6 +3228,13 @@ class AdvancedTabGroups {
     // native set it in the same startTabDrag call. Same element, last call wins
     // deterministically, so this does not race native (see the NOTE in
     // setupDragAndDropSync). Zen folders have a real box and are left alone.
+    //
+    // Two more ghost fixes live here:
+    // - Group icon: make sure the ghost header carries the group's icon.
+    // - Arc/expanded groups: temporarily collapse the dragged group so its
+    //   tabs follow the header instead of staying behind in the strip
+    //   (ariaFocusableItems lists tabs separately). Restored on dragend and
+    //   never persisted (see setupGroupCollapsedObserver).
     const proto = window.ZenDragAndDrop?.prototype;
     const nativeStartTabDrag = proto?.startTabDrag;
     if (typeof nativeStartTabDrag !== "function") {
@@ -3216,36 +3244,109 @@ class AdvancedTabGroups {
       return;
     }
 
+    const atg = this;
     proto.startTabDrag = function (event, tab, ...args) {
       const result = nativeStartTabDrag.call(this, event, tab, ...args);
       try {
-        const group = gBrowser.isTabGroupLabel(tab) ? tab.group : null;
         const [dragImage] = this.originalDragImageArgs ?? [];
-        if (
-          !dragImage ||
-          !group ||
-          group.isZenFolder ||
-          group.hasAttribute("split-view-group") ||
-          args[0]?.dragImageSource
-        ) {
+        if (!dragImage || args[0]?.dragImageSource) {
           return result;
         }
-        const rect = window.windowUtils.getBoundsWithoutFlushing(
-          group.labelContainerElement
-        );
-        dragImage.style.width = `${rect.width}px`;
-        dragImage.style.height = `${rect.height}px`;
-        this.originalDragImageArgs = [
-          dragImage,
-          event.clientX - rect.left,
-          event.clientY - rect.top,
-        ];
-        event.dataTransfer.setDragImage(...this.originalDragImageArgs);
+        let group = null;
+        try {
+          if (gBrowser.isTabGroupLabel?.(tab)) {
+            group = tab.group;
+          } else if (gBrowser.isTabGroup?.(tab)) {
+            group = tab;
+          }
+        } catch (_) {}
+        // --- Group drags ---
+        if (group && !group.isZenFolder &&
+          !group.hasAttribute("split-view-group") &&
+          atg.isManagedTabGroup?.(group)) {
+          try {
+            const rect = window.windowUtils.getBoundsWithoutFlushing(
+              group.labelContainerElement
+            );
+            dragImage.style.width = `${rect.width}px`;
+            dragImage.style.height = `${rect.height}px`;
+            this.originalDragImageArgs = [
+              dragImage,
+              event.clientX - rect.left,
+              event.clientY - rect.top,
+            ];
+            try { atg.ensureDragGhostGroupIcon?.(group, dragImage); } catch (_) {}
+            event.dataTransfer.setDragImage(...this.originalDragImageArgs);
+          } catch (error) {
+            console.error("[AdvancedTabGroups] Error anchoring group drag ghost:", error);
+          }
+          // Collapse expanded groups for the drag so tabs travel with the
+          // header; Arc groups are always expanded, so they need this most.
+          try {
+            const isCollapsed = group.collapsed || group.hasAttribute("collapsed");
+            if (!isCollapsed) {
+              atg._atgDragCollapsedGroup = group;
+              try { group.setAttribute("collapsed", "true"); } catch (_) {}
+              const restore = () => {
+                try {
+                  if (atg._atgDragCollapsedGroup === group) {
+                    atg._atgDragCollapsedGroup = null;
+                    try { group.removeAttribute("collapsed"); } catch (_) {}
+                  }
+                } catch (_) {}
+                document.removeEventListener("dragend", restore, true);
+              };
+              document.addEventListener("dragend", restore, true);
+            }
+          } catch (_) {}
+          return result;
+        }
       } catch (error) {
         console.error("[AdvancedTabGroups] Error anchoring group drag ghost:", error);
       }
       return result;
     };
+  }
+
+  // Make sure a group drag ghost actually shows the group's icon. The ghost
+  // is a live clone, but baked icon paint and upload srcs can be missing if
+  // the clone was taken before the icon settled - copy from the live group.
+  ensureDragGhostGroupIcon(group, dragImage) {
+    try {
+      const ghostGroup = dragImage?.querySelector?.("tab-group") || null;
+      if (!ghostGroup) {
+        return;
+      }
+      const realIcon = group?.querySelector?.(".tab-group-icon .group-icon, .tab-group-icon label");
+      if (!realIcon) {
+        return;
+      }
+      let ghostIconContainer = ghostGroup.querySelector?.(".tab-group-icon-container");
+      let ghostIcon = ghostGroup.querySelector?.(".tab-group-icon");
+      if (!ghostIconContainer || !ghostIcon) {
+        return;
+      }
+      const hasIcon = !!ghostGroup.querySelector?.(".tab-group-icon .group-icon, .tab-group-icon label");
+      if (hasIcon) {
+        return;
+      }
+      const copy = realIcon.cloneNode(true);
+      try {
+        copy.removeAttribute?.("id");
+        if (copy.style) {
+          copy.style.width = "16px";
+          copy.style.height = "16px";
+        }
+      } catch (_) {}
+      ghostIcon.appendChild(copy);
+      // Carry the live paint so context-fill baked colors match the strip.
+      try {
+        const cs = getComputedStyle(group.querySelector(".tab-group-icon-container"));
+        if (cs?.color) {
+          ghostIconContainer.style.color = cs.color;
+        }
+      } catch (_) {}
+    } catch (_) {}
   }
 
   setupGroupDropTargeting() {
@@ -3287,6 +3388,14 @@ class AdvancedTabGroups {
     // (top/bottom ~20% = line/reorder, middle = background/into). ATG headers
     // had no such zones, so every pixel dropped into the group.
     //
+    // Native always maps a group-label hover to "into group at top"
+    // (dropElement = group.tabs[0], dropBefore = true), even when the
+    // indicator shows a reorder line. So the class toggle alone changes the
+    // visuals but the tab still lands inside - the dreadful above/below
+    // behavior. ATG therefore intercepts drop in edge zones and moves the
+    // tabs itself (outside the group, via zenHandleTabMove so window sync
+    // follows).
+    //
     // We get the same feel without forking private native methods by toggling
     // the header's zen-drop-target class per pointer position: edges remove it
     // (native falls back to reorder math + line indicator), middle restores it
@@ -3319,13 +3428,31 @@ class AdvancedTabGroups {
         setTimeout(run, 0);
       }
     }, true);
-    for (const endEvent of ["drop", "dragend", "dragleave"]) {
-      document.addEventListener(endEvent, () => {
-        this._dragoverQueued = false;
-        this._dragoverLastEvent = null;
-        this.restoreGroupHeaderDropZones();
-      }, true);
-    }
+    // Drop interception must run before native (capture on document runs
+    // first). If we handle an above/below edge, stop native so it can't
+    // redirect the drop back into the group (native always maps a group-label
+    // hover to into-group at top).
+    // NOTE: no dragleave restore - dragleave fires when moving between
+    // children inside the header (icon/label/buttons), which caused rapid
+    // remove/restore flicker plus a full-document querySelectorAll per step.
+    document.addEventListener("drop", event => {
+      try {
+        if (this.handleAtgEdgeDrop(event)) {
+          this._dragoverQueued = false;
+          this._dragoverLastEvent = null;
+          this.restoreGroupHeaderDropZones();
+          return;
+        }
+      } catch (_) {}
+      this._dragoverQueued = false;
+      this._dragoverLastEvent = null;
+      this.restoreGroupHeaderDropZones();
+    }, true);
+    document.addEventListener("dragend", () => {
+      this._dragoverQueued = false;
+      this._dragoverLastEvent = null;
+      this.restoreGroupHeaderDropZones();
+    }, true);
   }
 
   getFolderDragoverThreshold() {
@@ -3360,8 +3487,27 @@ class AdvancedTabGroups {
       const container = event.target?.closest?.(".tab-group-label-container");
       const group = container?.closest?.("tab-group");
       if (!group || !this.isManagedTabGroup(group)) {
-        if (this._edgeZoneHeader && !this._edgeZoneHeader.isConnected) {
-          this._edgeZoneHeader = null;
+        // Gaps with no header under the pointer (strip chrome above the
+        // first group, or the seam between two groups): native would file
+        // these as into-group. Show a reorder line instead.
+        try {
+          const gap = this.getAtgStripGapTarget(event);
+          if (gap?.group) {
+            const gapHeader = gap.group.querySelector?.(".tab-group-label-container");
+            if (gap.position === "before" && gapHeader?.classList?.contains("zen-drop-target")) {
+              gapHeader.classList.remove("zen-drop-target");
+              gapHeader.setAttribute("data-atg-edge-reorder", "true");
+              this._edgeZoneHeader = gapHeader;
+            } else if (!gapHeader?.hasAttribute?.("data-atg-edge-reorder") && this._edgeZoneHeader) {
+              this.restoreGroupHeaderDropZones();
+            }
+          } else if (this._edgeZoneHeader) {
+            this.restoreGroupHeaderDropZones();
+          }
+        } catch (_) {
+          if (this._edgeZoneHeader) {
+            try { this.restoreGroupHeaderDropZones(); } catch (_) {}
+          }
         }
         return;
       }
@@ -3375,7 +3521,11 @@ class AdvancedTabGroups {
         return;
       }
       const threshold = this.getFolderDragoverThreshold();
-      const overlap = (event.clientY - rect.top) / rect.height;
+      // 20% of a ~30px header is ~6px - too small to hit reliably. Keep the
+      // folder pref as the base but guarantee at least ~12px zones.
+      const edgePx = Math.max(threshold * rect.height, 12);
+      const distTop = event.clientY - rect.top;
+      const distBottom = rect.bottom - event.clientY;
       // Hot path: prefer the native childGroupsAndTabs count; the
       // querySelectorAll fallback only runs where native is missing.
       let childCount = 0;
@@ -3386,9 +3536,9 @@ class AdvancedTabGroups {
       } catch (_) {
         childCount = 0;
       }
-      const isEdge = overlap < threshold ||
-        (overlap > 1 - threshold &&
-          (group.collapsed || group.hasAttribute("collapsed") || childCount < 2));
+      const isCollapsed = group.collapsed || group.hasAttribute("collapsed");
+      const isEdge = distTop < edgePx ||
+        (distBottom < edgePx && (isCollapsed || childCount < 2));
 
       if (isEdge) {
         // Reorder intent: hide header from native closest('.zen-drop-target')
@@ -3421,6 +3571,8 @@ class AdvancedTabGroups {
       }
       this._edgeZoneHeader = null;
       // Safety net in case a drag ended mid-edge on a different header.
+      // Only runs on drop/dragend now (not per-dragleave), so the full scan
+      // is a once-per-drag cost, not per-mousemove jank.
       document.querySelectorAll?.(
         '.tab-group-label-container[data-atg-edge-reorder]'
       ).forEach(el => {
@@ -3428,6 +3580,291 @@ class AdvancedTabGroups {
         el.removeAttribute("data-atg-edge-reorder");
       });
     } catch (_) {}
+  }
+
+  // Seams with no tab/header under the pointer: the gap above the first
+  // group (new-tab button, separator, empty strip) and the seam between two
+  // groups. Native files these as into-group; treat a near-miss above a
+  // group's header as above-group so tops and seams stay reachable.
+  // Returns {group, position:'before'} or null. Only fires when the pointer
+  // is over gap chrome (not inside any tab/group) to avoid hijacking
+  // into-group drops.
+  getAtgStripGapTarget(event) {
+    try {
+      const strip = window.gZenWorkspaces?.activeWorkspaceStrip;
+      if (!strip?.isConnected) {
+        return null;
+      }
+      // Must be a strip drag (not pinned/essentials/library).
+      const inStrip = event.target?.closest?.(
+        "#tabbrowser-tabs, .zen-workspace-normal-tabs-section, zen-workspace"
+      );
+      if (!inStrip) {
+        return null;
+      }
+      // Gap only: if we're over any tab or group, header/last-tab checks own it.
+      try {
+        if (event.target?.closest?.(".tabbrowser-tab, tab-group")) {
+          return null;
+        }
+      } catch (_) {}
+      // Nearest top-level managed group below the pointer.
+      let best = null;
+      let bestDist = Infinity;
+      try {
+        const groups = strip.querySelectorAll?.("tab-group") || [];
+        for (const g of groups) {
+          try {
+            if (!this.isManagedTabGroup(g) || !g.isConnected) continue;
+            // Top-level only: nested groups live inside .tab-group-container.
+            if (g.parentElement !== strip) continue;
+            if (g.hasAttribute("split-view-group")) continue;
+            const header = g.querySelector?.(".tab-group-label-container");
+            const r = header?.getBoundingClientRect?.() || g.getBoundingClientRect?.();
+            if (!r || !(r.height > 0 && r.width > 0)) continue;
+            const dist = r.top - event.clientY;
+            if (dist >= 0 && dist < bestDist) {
+              bestDist = dist;
+              best = g;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+      // Generous 48px to cover the new-tab button / separator / seam gaps.
+      // Far-above hits (essentials/pinned) are left to native.
+      if (best && bestDist < 48) {
+        return { group: best, position: "before" };
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  getAtgTopGapTarget(event) {
+    try {
+      return this.getAtgStripGapTarget(event);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Synchronously resolve an above/below-group edge for a drop event.
+  // Returns {group, position: 'before'|'after'} or null (middle = into,
+  // let native handle). Must stay in sync with updateGroupHeaderDropZone.
+  _moveWithWindowSync(node, moveFn) {
+    try {
+      if (node && typeof gBrowser?.zenHandleTabMove === "function") {
+        gBrowser.zenHandleTabMove(node, moveFn);
+      } else {
+        moveFn();
+      }
+    } catch (_) {
+      try {
+        moveFn();
+      } catch (_) {}
+    }
+  }
+
+  getAtgEdgeDropTarget(event) {
+    try {
+      const dt = event.dataTransfer;
+      if (!dt) {
+        return null;
+      }
+      let types = [];
+      try {
+        types = Array.from(dt.types || []);
+      } catch (_) {}
+      if (types.length &&
+        !types.includes("application/x-moz-tab") &&
+        !types.includes("text/tab")) {
+        return null;
+      }
+      // Header zones: top edge = above group, bottom edge (collapsed/small
+      // only) = below group. Middle = into group (native).
+      const container = event.target?.closest?.(".tab-group-label-container");
+      const group = container?.closest?.("tab-group");
+      if (group && this.isManagedTabGroup(group) &&
+        !group.hasAttribute("split-view-group")) {
+        const rect = container.getBoundingClientRect?.();
+        if (rect?.height) {
+          const threshold = this.getFolderDragoverThreshold();
+          const edgePx = Math.max(threshold * rect.height, 12);
+          const distTop = event.clientY - rect.top;
+          const distBottom = rect.bottom - event.clientY;
+          let childCount = 0;
+          try {
+            childCount = group.childGroupsAndTabs?.length ??
+              group.querySelector?.(":scope > .tab-group-container")?.childElementCount ??
+              0;
+          } catch (_) {}
+          const isCollapsed = group.collapsed || group.hasAttribute("collapsed");
+          if (distTop < edgePx) {
+            return { group, position: "before" };
+          }
+          if (distBottom < edgePx && (isCollapsed || childCount < 2)) {
+            return { group, position: "after" };
+          }
+          return null;
+        }
+      }
+      // Below-group zone for expanded groups: bottom edge of the last visible
+      // tab still maps to into-group natively, leaving no way to land below
+      // the group. Treat the bottom ~12px (or threshold) of the last tab as
+      // below-group so expanded groups are reachable without collapsing.
+      try {
+        const tab = event.target?.closest?.(".tabbrowser-tab");
+        if (tab && gBrowser.isTab?.(tab) && tab.group &&
+          this.isManagedTabGroup(tab.group) &&
+          !tab.group.hasAttribute("split-view-group") &&
+          !tab.pinned && !tab.hasAttribute("zen-essential")) {
+          const g = tab.group;
+          if (!g.collapsed && !g.hasAttribute("collapsed")) {
+            let kids = [];
+            try {
+              kids = Array.from(g.childGroupsAndTabs || [])
+                .filter(n => n && n.visible !== false);
+            } catch (_) {}
+            let last = kids.length ? kids[kids.length - 1] : null;
+            // Unwrap a trailing nested group to its last tab for hit testing.
+            try {
+              while (last && gBrowser.isTabGroup?.(last) && last.tabs?.length) {
+                const vtabs = last.tabs.filter(t => t.visible !== false);
+                last = vtabs.length ? vtabs[vtabs.length - 1] : last;
+                break;
+              }
+            } catch (_) {}
+            const isLast = last ? (last === tab || last?.contains?.(tab)) : (() => {
+              try {
+                const containerEl = g.querySelector?.(":scope > .tab-group-container");
+                if (!containerEl) return false;
+                const tabs = Array.from(containerEl.querySelectorAll?.(":scope > tab") || [])
+                  .filter(t => t.visible !== false && !t.hasAttribute("zen-empty-tab"));
+                return tabs.length ? tabs[tabs.length - 1] === tab : false;
+              } catch (_) { return false; }
+            })();
+            if (isLast) {
+              const r = tab.getBoundingClientRect?.();
+              if (r?.height) {
+                const threshold = this.getFolderDragoverThreshold();
+                const edgePx = Math.max(threshold * r.height, 12);
+                if (r.bottom - event.clientY < edgePx) {
+                  return { group: g, position: "after" };
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      // Top-of-strip gap (see updateGroupHeaderDropZone): pointer above the
+      // first header, over strip chrome instead of any tab/header.
+      try {
+        const topGap = this.getAtgTopGapTarget(event);
+        if (topGap?.group) {
+          return topGap;
+        }
+      } catch (_) {}
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Intercept drops in edge zones: native would still file them as
+  // into-group at top, so move the tabs outside the group ourselves.
+  // Returns true when handled (native must not run).
+  handleAtgEdgeDrop(event) {
+    try {
+      const edge = this.getAtgEdgeDropTarget(event);
+      if (!edge?.group?.isConnected) {
+        return false;
+      }
+      const dt = event.dataTransfer;
+      if (!dt || !dt.mozGetDataAt) {
+        return false;
+      }
+      let draggedTab = null;
+      try {
+        draggedTab = dt.mozGetDataAt("application/x-moz-tab", 0);
+      } catch (_) {
+        return false;
+      }
+      if (!draggedTab || draggedTab.documentGlobal !== window) {
+        return false;
+      }
+      // Group drags already work natively - only fix tab drags.
+      try {
+        if (gBrowser.isTabGroupLabel?.(draggedTab) ||
+          gBrowser.isTabGroup?.(draggedTab)) {
+          return false;
+        }
+      } catch (_) {}
+      if (!gBrowser.isTab?.(draggedTab)) {
+        return false;
+      }
+      if (draggedTab.pinned || draggedTab.hasAttribute("zen-essential") ||
+        draggedTab.hasAttribute("zen-glance-tab") ||
+        draggedTab.group?.hasAttribute("split-view-group")) {
+        return false;
+      }
+      let movingTabs = [];
+      try {
+        movingTabs = Array.from(draggedTab._dragData?.movingTabs || [draggedTab])
+          .filter(t => gBrowser.isTab?.(t) && !t.pinned &&
+            !t.hasAttribute("zen-essential") &&
+            !t.group?.hasAttribute("split-view-group"));
+      } catch (_) {
+        movingTabs = [draggedTab];
+      }
+      if (!movingTabs.length) {
+        return false;
+      }
+      const group = edge.group;
+      const parent = group.parentElement;
+      if (!parent?.isConnected && parent !== document) {
+        return false;
+      }
+      const workspaceId = this.getGroupWorkspaceId(group) ||
+        window.gZenWorkspaces?.activeWorkspace || null;
+
+      event.preventDefault();
+      try { event.stopImmediatePropagation(); } catch (_) {}
+      try { event.stopPropagation(); } catch (_) {}
+      this.restoreGroupHeaderDropZones();
+
+      try {
+        if (edge.position === "before") {
+          for (const tab of movingTabs) {
+            if (tab === group) continue;
+            try {
+              if (workspaceId) tab.setAttribute("zen-workspace-id", workspaceId);
+            } catch (_) {}
+            this._moveWithWindowSync(tab, () => parent.insertBefore(tab, group));
+          }
+        } else {
+          const anchor = group.nextSibling;
+          for (const tab of movingTabs) {
+            if (tab === group) continue;
+            try {
+              if (workspaceId) tab.setAttribute("zen-workspace-id", workspaceId);
+            } catch (_) {}
+            this._moveWithWindowSync(tab, () => parent.insertBefore(tab, anchor));
+          }
+        }
+      } catch (moveErr) {
+        console.error("[AdvancedTabGroups] Error moving tabs outside group:", moveErr);
+      }
+      try {
+        gBrowser.tabContainer?._invalidateCachedTabs?.();
+      } catch (_) {}
+      try { this.requestUpdateGroupVisibility?.(); } catch (_) {}
+      try { this.scheduleSavedParentsSync?.(); } catch (_) {}
+      return true;
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error handling edge drop:", error);
+      return false;
+    }
   }
 
   isManagedTabGroup(group) {
@@ -3773,7 +4210,34 @@ class AdvancedTabGroups {
 
       // A copy of a group created in another window (window sync): keep its
       // label and colour, and don't open the rename box in this window.
+      // Mirrored ATG icon/colour state rides along via __atgMirrorIcon so the
+      // copy renders and persists it for the next restart.
       if (window.__atgMirroringGroupId && window.__atgMirroringGroupId === group.id) {
+        try {
+          const pending = window.__atgMirrorIcon;
+          if (pending && pending.id === group.id) {
+            if (pending.colorVal !== undefined) {
+              try {
+                const colors = this.savedColors || {};
+                colors[group.id] = pending.colorVal;
+                this.savedColors = colors;
+              } catch (_) {}
+              try {
+                this.applySavedColor(group.id, pending.colorVal)?.catch?.(() => {});
+              } catch (_) {}
+            }
+            if (pending.iconUrl) {
+              try {
+                const icons = this.savedIcons || {};
+                icons[group.id] = pending.iconUrl;
+                this.savedIcons = icons;
+              } catch (_) {}
+              try {
+                this.applyGroupIcon(group, pending.iconUrl)?.catch?.(() => {});
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
         setTimeout(() => this.updateGroupVisibility(), 100);
         return;
       }
@@ -5053,23 +5517,52 @@ class AdvancedTabGroups {
   // Apply saved icons to tab groups. The bundled Tabler pack builds lazily:
   // only awaited here when a saved icon actually needs resource://atg-tabler/*
   // (each icon is gated again in applyGroupIcon).
+  // Groups may restore after ATG init on boot, so wait for each missing
+  // group (like applySavedColor does) instead of skipping it - otherwise
+  // icons are silently lost on restart.
   async applySavedIcons() {
     try {
       const icons = this.savedIcons;
-      const needsPack = Object.values(icons).some(url => this.isAtgTablerIconUrl(url));
+      const entries = Object.entries(icons || {});
+      if (!entries.length) {
+        return;
+      }
+      const needsPack = entries.some(([, url]) => this.isAtgTablerIconUrl(url));
       if (needsPack) {
         await this.ensureAtgCustomIconsReady();
       }
-      Object.entries(icons).forEach(([groupId, iconUrl]) => {
+      await Promise.allSettled(entries.map(async ([groupId, iconUrl]) => {
         try {
-          const group = this.getGroupById(groupId);
-          if (group && (!group.hasAttribute || !group.hasAttribute("split-view-group"))) {
-            this.applyGroupIcon(group, iconUrl);
+          if (!groupId || !iconUrl) {
+            return;
           }
-        } catch (error) {
-          console.error("[AdvancedTabGroups] Error applying saved icon:", groupId, error);
-        }
-      });
+          let group = null;
+          try {
+            group = this._liveGroupById(groupId) || null;
+          } catch (_) {
+            group = null;
+          }
+          if (!group || !group.isConnected) {
+            try {
+              const esc = (typeof CSS !== "undefined" && CSS.escape)
+                ? CSS.escape(groupId)
+                : groupId;
+              group = await this.waitForElm(`tab-group[id="${esc}"]`);
+            } catch (_) {
+              group = null;
+            }
+          }
+          if (!group || !group.isConnected) {
+            return;
+          }
+          try {
+            if (group.hasAttribute?.("split-view-group") || this.isLibraryGroupCopy(group)) {
+              return;
+            }
+          } catch (_) {}
+          await this.applyGroupIcon(group, iconUrl);
+        } catch (_) {}
+      }));
     } catch (error) {
       console.error("[AdvancedTabGroups] Error applying saved icons:", error);
     }

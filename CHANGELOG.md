@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.11.1 - 2026-10-28 - Icon persistence + drag edge gaps
+
+- Icons are no longer lost on restart. `applySavedIcons` used to look groups up once at init and skip any that hadn't restored yet; it now waits for each group (like colors do) and skips only split-view/library copies, so late-restored groups still get their icons.
+- Window-synced group copies now carry ATG icon and colour state. The mirror previously copied id/label/native colour only, so other windows never saved the icon and a restart could drop it; the source icon/colour now rides along and is applied + persisted in each window.
+- Dragging above the top group and into the seam between two groups now lands outside instead of snapping into a group. Gap chrome (new-tab button, separator, empty strip) maps to before the nearest group below within 48px.
+- Group drag ghosts keep the group's icon (copied from the live group when the clone misses it), and expanded/Arc groups temporarily collapse for the drag so tabs travel with the header instead of staying behind; restored on dragend and never persisted.
+
 ## 3.11.0 - 2026-10-28 - Window-sync + performance pass
 
 - Move group to Space now syncs across windows. The group is moved as a single tracked move (`gBrowser.zenHandleTabMove`), so Zen's window sync receives `TabMove` for each tab and `TabGroupMoved` for the group. Previously each tab was moved out of the group (synced) and the group and tabs were then moved back with plain DOM inserts (not synced), so other windows got loose tabs, and with several windows open the group was lost on restart (tabs restored ungrouped).

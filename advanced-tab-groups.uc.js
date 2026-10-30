@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.11.1 ======= */
+/* ======= v3.12.0 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -82,6 +82,11 @@ class AdvancedTabGroups {
 
     // Add folder context menu item
     this.addFolderContextMenuItems();
+
+    // Shortcut (Ctrl/Cmd+Shift+G by default) + tab context menu entry to
+    // group the currently selected tabs instantly (fixes #160).
+    this.setupGroupSelectedShortcut();
+    this.setupGroupSelectedTabMenu();
 
     // Make Zen Library render ATG tab groups differently from folders.
     this.setupZenLibraryIntegration();
@@ -5662,6 +5667,362 @@ class AdvancedTabGroups {
     } catch (error) {
       console.error("[AdvancedTabGroups] Error removing saved collapsed state:", error);
     }
+  }
+
+  // ---- Group selected tabs via shortcut (fixes #160) ----
+  // Instantly groups the currently multi-selected tabs, using the same
+  // creation path as manual grouping so rename + favicon color apply.
+  static GROUP_SELECTED_DEFAULT_SHORTCUT = "Ctrl+Shift+G";
+  static GROUP_SELECTED_PREF_ENABLED = "browser.tabs.groups.group-selected-shortcut-enabled";
+  static GROUP_SELECTED_PREF_SHORTCUT = "browser.tabs.groups.group-selected-shortcut";
+
+  isGroupShortcutEnabled() {
+    try {
+      return Services.prefs.getBoolPref(
+        AdvancedTabGroups.GROUP_SELECTED_PREF_ENABLED,
+        true
+      );
+    } catch (_) {
+      return true;
+    }
+  }
+
+  getGroupShortcut() {
+    try {
+      const raw = Services.prefs.getStringPref(
+        AdvancedTabGroups.GROUP_SELECTED_PREF_SHORTCUT,
+        AdvancedTabGroups.GROUP_SELECTED_DEFAULT_SHORTCUT
+      );
+      if (typeof raw === "string" && raw.trim()) {
+        return raw.trim();
+      }
+    } catch (_) {}
+    return AdvancedTabGroups.GROUP_SELECTED_DEFAULT_SHORTCUT;
+  }
+
+  // "Ctrl+Shift+G" -> { ctrl:true, shift:true, key:"g" }.
+  // "Ctrl" is treated as Accel (Ctrl on Win/Linux, Cmd or Ctrl on Mac) so
+  // the default works cross-platform; "Cmd"/"Meta" strictly means Meta.
+  parseGroupShortcut(str) {
+    const spec = { ctrl: false, meta: false, alt: false, shift: false, accel: false, key: null, keyLabel: "" };
+    try {
+      const parts = String(str ?? "").split("+").map(s => s.trim()).filter(Boolean);
+      for (const part of parts) {
+        const lower = part.toLowerCase();
+        if (["ctrl", "control"].includes(lower)) {
+          spec.ctrl = true;
+        } else if (["cmd", "command", "meta", "win", "super"].includes(lower)) {
+          spec.meta = true;
+        } else if (["accel"].includes(lower)) {
+          spec.accel = true;
+        } else if (["alt", "option"].includes(lower)) {
+          spec.alt = true;
+        } else if (["shift"].includes(lower)) {
+          spec.shift = true;
+        } else if (spec.key === null) {
+          spec.key = lower;
+          spec.keyLabel = part;
+        }
+      }
+      if (spec.key === "space") {
+        spec.key = " ";
+      }
+    } catch (_) {}
+    return spec;
+  }
+
+  matchesGroupShortcut(event, spec) {
+    try {
+      if (!spec?.key) {
+        return false;
+      }
+      // Alt/Shift must match exactly.
+      if (!!event.altKey !== !!spec.alt) {
+        return false;
+      }
+      if (!!event.shiftKey !== !!spec.shift) {
+        return false;
+      }
+      const wantsAccel = !!(spec.ctrl || spec.accel);
+      const wantsMeta = !!spec.meta;
+      if (spec.accel && !spec.ctrl && !spec.meta) {
+        // Explicit "Accel": either Ctrl or Cmd.
+        if (!(event.ctrlKey || event.metaKey)) {
+          return false;
+        }
+      } else if (wantsAccel && wantsMeta) {
+        // e.g. "Ctrl+Cmd+G": require both.
+        if (!(event.ctrlKey && event.metaKey)) {
+          return false;
+        }
+      } else if (wantsAccel) {
+        // Default "Ctrl": accept Ctrl (Win/Linux) or Cmd (Mac).
+        if (!(event.ctrlKey || event.metaKey)) {
+          return false;
+        }
+      } else if (wantsMeta) {
+        if (!event.metaKey) {
+          return false;
+        }
+        if (event.ctrlKey) {
+          return false;
+        }
+      } else {
+        // No Ctrl/Cmd requested: forbid both so "Shift+G" doesn't fire on Ctrl+Shift+G.
+        if (event.ctrlKey || event.metaKey) {
+          return false;
+        }
+      }
+      const pressed = typeof event.key === "string" ? event.key.toLowerCase() : "";
+      if (!pressed) {
+        return false;
+      }
+      // Single-character keys: compare case-insensitively ("G" with Shift down reads as "G").
+      if (spec.key.length === 1) {
+        return pressed === spec.key.toLowerCase();
+      }
+      return pressed === spec.key.toLowerCase();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Tabs the shortcut / menu entry is allowed to group: real, unpinned,
+  // non-essential tabs outside split views, in tab-strip order.
+  getGroupableSelectedTabs() {
+    let raw = [];
+    try {
+      if (typeof gBrowser?.getSelectedTabs === "function") {
+        try {
+          raw = gBrowser.getSelectedTabs({ sorted: false }) || [];
+        } catch (_) {
+          raw = gBrowser.selectedTabs || [];
+        }
+      } else {
+        raw = gBrowser?.selectedTabs || [];
+      }
+      if ((!raw || !raw.length) && gBrowser?.selectedTab) {
+        raw = [gBrowser.selectedTab];
+      }
+    } catch (_) {
+      raw = [];
+    }
+    const out = [];
+    const seen = new Set();
+    for (const tab of raw || []) {
+      try {
+        if (!tab || seen.has(tab)) {
+          continue;
+        }
+        seen.add(tab);
+        const isTab = typeof gBrowser?.isTab === "function"
+          ? gBrowser.isTab(tab)
+          : tab.localName === "tab";
+        if (!isTab) {
+          continue;
+        }
+        if (tab.pinned) {
+          continue;
+        }
+        if (tab.hasAttribute?.("zen-empty-tab")) {
+          continue;
+        }
+        if (tab.hasAttribute?.("zen-essential")) {
+          continue;
+        }
+        if (tab.hasAttribute?.("cloned")) {
+          continue;
+        }
+        if (tab.group?.hasAttribute?.("split-view-group")) {
+          continue;
+        }
+        if (tab.splitView) {
+          continue;
+        }
+        out.push(tab);
+      } catch (_) {}
+    }
+    out.sort((a, b) => (a._tPos ?? 0) - (b._tPos ?? 0));
+    return out;
+  }
+
+  groupSelectedTabs() {
+    try {
+      const tabs = this.getGroupableSelectedTabs();
+      if (tabs.length < 2) {
+        return null;
+      }
+      // Already one group containing exactly these tabs: nothing to do.
+      try {
+        const groups = new Set(
+          tabs.map(tab => tab.group).filter(group =>
+            group &&
+            group.localName === "tab-group" &&
+            !group.hasAttribute?.("split-view-group")
+          )
+        );
+        if (groups.size === 1) {
+          const only = [...groups][0];
+          const memberIds = new Set((only.tabs || []).map(tab => tab));
+          if (tabs.every(tab => memberIds.has(tab))) {
+            return only;
+          }
+        }
+      } catch (_) {}
+      const first = tabs[0];
+      if (typeof gBrowser?.addTabGroup === "function") {
+        return gBrowser.addTabGroup(tabs, { insertBefore: first });
+      }
+      // Fallback: manual group creation (mirrors convertFolderToGroup).
+      const newGroup = document.createXULElement("tab-group");
+      newGroup.id = `${Date.now()}-${Math.round(Math.random() * 100)}`;
+      newGroup.label = "";
+      try {
+        const container = gZenWorkspaces?.activeWorkspaceStrip ||
+          gBrowser.tabContainer.querySelector("tabs");
+        if (first?.before) {
+          first.before(newGroup);
+        } else {
+          container?.prepend?.(newGroup);
+        }
+        newGroup.addTabs(tabs);
+        this.processGroup(newGroup);
+        return newGroup;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error during shortcut group creation:", error);
+        return null;
+      }
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error grouping selected tabs:", error);
+      return null;
+    }
+  }
+
+  handleGroupShortcutKeydown(event) {
+    try {
+      if (!event || event.defaultPrevented) {
+        return;
+      }
+      if (!this.isGroupShortcutEnabled()) {
+        return;
+      }
+      const target = event.target;
+      try {
+        const tag = target?.tagName?.toLowerCase?.();
+        if (tag === "input" || tag === "textarea" || tag === "select") {
+          return;
+        }
+        if (target?.isContentEditable) {
+          return;
+        }
+        if (target?.closest?.("#tab-label-input, #urlbar-input, .urlbar-input, #zen-search-input")) {
+          return;
+        }
+      } catch (_) {}
+      if (document.documentElement.hasAttribute("zen-renaming-group")) {
+        return;
+      }
+      const spec = this.parseGroupShortcut(this.getGroupShortcut());
+      if (!this.matchesGroupShortcut(event, spec)) {
+        return;
+      }
+      // Gate on multi-selection so the default (Ctrl/Cmd+Shift+G = Find
+      // Previous) keeps working for single-tab / find usage.
+      if (this.getGroupableSelectedTabs().length < 2) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      this.groupSelectedTabs();
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error handling group shortcut:", error);
+    }
+  }
+
+  // Installed once per window: Sine re-runs .uc.js on rebuild, so a
+  // per-instance listener would double up. The global listener forwards to
+  // the current instance.
+  setupGroupSelectedShortcut() {
+    try {
+      if (window.__atgGroupSelectedShortcutInstalled) {
+        return;
+      }
+      window.__atgGroupSelectedShortcutInstalled = true;
+      window.addEventListener(
+        "keydown",
+        event => {
+          try {
+            globalThis.advancedTabGroups?.handleGroupShortcutKeydown?.(event);
+          } catch (_) {}
+        },
+        true
+      );
+    } catch (error) {
+      console.error("[AdvancedTabGroups] Error setting up group shortcut:", error);
+    }
+  }
+
+  setupGroupSelectedTabMenu() {
+    const wire = () => {
+      try {
+        const menu = document.getElementById("tabContextMenu");
+        if (!menu) {
+          return false;
+        }
+        let item = document.getElementById("atg-group-selected-tabs");
+        if (!item) {
+          const frag = window.MozXULElement.parseXULToFragment(
+            `<menuitem id="atg-group-selected-tabs" label="Group Selected Tabs"/>`
+          );
+          item = frag?.firstElementChild;
+          if (!item) {
+            return false;
+          }
+          const anchor = menu.querySelector(
+            "#context_addTabToNewGroup, #context_moveTabToGroup, #context_zenSplitTabs"
+          );
+          if (anchor?.after) {
+            anchor.after(item);
+          } else {
+            menu.appendChild(item);
+          }
+          item.addEventListener("command", () => {
+            try {
+              globalThis.advancedTabGroups?.groupSelectedTabs?.();
+            } catch (_) {}
+          });
+        }
+        if (item.__atgGroupMenuWired) {
+          return true;
+        }
+        item.__atgGroupMenuWired = true;
+        menu.addEventListener("popupshowing", () => {
+          try {
+            const atg = globalThis.advancedTabGroups;
+            const tabs = atg?.getGroupableSelectedTabs?.() || [];
+            const show = tabs.length >= 2;
+            item.hidden = !show;
+            if (show) {
+              const shortcut = atg?.getGroupShortcut?.() || AdvancedTabGroups.GROUP_SELECTED_DEFAULT_SHORTCUT;
+              item.setAttribute("label", `Group ${tabs.length} Selected Tabs (${shortcut})`);
+            }
+          } catch (_) {}
+        });
+        return true;
+      } catch (error) {
+        console.error("[AdvancedTabGroups] Error wiring group-selected menu:", error);
+        return false;
+      }
+    };
+    try {
+      if (!wire()) {
+        this.waitForElm("#tabContextMenu").then(() => {
+          try {
+            wire();
+          } catch (_) {}
+        }).catch(() => {});
+      }
+    } catch (_) {}
   }
 
   // Public method to manually trigger color update for all groups

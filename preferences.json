@@ -31,5 +31,22 @@
     "type": "checkbox",
     "label": "Make group headers look like Zen folders (folder icon, open/close animation, active dots)",
     "defaultValue": true
+  },
+  {
+    "type": "separator",
+    "label": "Group selected tabs shortcut"
+  },
+  {
+    "property": "browser.tabs.groups.group-selected-shortcut-enabled",
+    "type": "checkbox",
+    "label": "Enable keyboard shortcut to group selected tabs",
+    "defaultValue": true
+  },
+  {
+    "property": "browser.tabs.groups.group-selected-shortcut",
+    "type": "string",
+    "label": "Shortcut to group selected tabs (e.g. Ctrl+Shift+G; Ctrl means Cmd on Mac)",
+    "defaultValue": "Ctrl+Shift+G",
+    "placeholder": "Ctrl+Shift+G"
   }
 ]

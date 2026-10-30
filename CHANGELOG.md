@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.12.0 - 2026-10-30 - Group selected tabs shortcut (fixes #160)
+
+- Added a customizable keyboard shortcut to group the currently selected tabs instantly (default `Ctrl+Shift+G`, `Ctrl` means `Cmd` on Mac, so `Cmd+Shift+G` works there too).
+- The shortcut only fires with 2+ groupable tabs selected, so the default doesn't hijack Find Previous (`Ctrl/Cmd+Shift+G`) during normal single-tab use; it can be changed via `browser.tabs.groups.group-selected-shortcut` and toggled via `browser.tabs.groups.group-selected-shortcut-enabled`.
+- Added a `Group N Selected Tabs (shortcut)` entry to the tab right-click menu, shown only for multi-selection, using the same creation path as manual grouping (rename prompt + favicon color).
+- Pinned, essential, empty, and split-view tabs are skipped; a selection already forming exactly one group is a no-op.
+
 ## 3.11.1 - 2026-10-28 - Icon persistence + drag edge gaps
 
 - Icons are no longer lost on restart. `applySavedIcons` used to look groups up once at init and skip any that hadn't restored yet; it now waits for each group (like colors do) and skips only split-view/library copies, so late-restored groups still get their icons.

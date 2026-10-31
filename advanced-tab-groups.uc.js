@@ -4,7 +4,7 @@
 // ==/UserScript==
 /* ==== Tab groups ==== */
 /* https://github.com/Anoms12/Advanced-Tab-Groups */
-/* ======= v3.12.0 ======= */
+/* ======= v3.12.1 ======= */
 
 // Resolved once at load so the Zen Library shadowRoot <link> below can find
 // its sibling stylesheet even when this method runs much later.
@@ -5670,8 +5670,8 @@ class AdvancedTabGroups {
   }
 
   // ---- Group selected tabs via shortcut (fixes #160) ----
-  // Instantly groups the currently multi-selected tabs, using the same
-  // creation path as manual grouping so rename + favicon color apply.
+  // Instantly groups the currently selected tabs (single or multi),
+  // using the same creation path as manual grouping so rename + favicon color apply.
   static GROUP_SELECTED_DEFAULT_SHORTCUT = "Ctrl+Shift+G";
   static GROUP_SELECTED_PREF_ENABLED = "browser.tabs.groups.group-selected-shortcut-enabled";
   static GROUP_SELECTED_PREF_SHORTCUT = "browser.tabs.groups.group-selected-shortcut";
@@ -5849,7 +5849,7 @@ class AdvancedTabGroups {
   groupSelectedTabs() {
     try {
       const tabs = this.getGroupableSelectedTabs();
-      if (tabs.length < 2) {
+      if (tabs.length < 1) {
         return null;
       }
       // Already one group containing exactly these tabs: nothing to do.
@@ -5926,9 +5926,10 @@ class AdvancedTabGroups {
       if (!this.matchesGroupShortcut(event, spec)) {
         return;
       }
-      // Gate on multi-selection so the default (Ctrl/Cmd+Shift+G = Find
-      // Previous) keeps working for single-tab / find usage.
-      if (this.getGroupableSelectedTabs().length < 2) {
+      // Gate on having something groupable. Note: with a single tab this
+      // takes precedence over Find Previous on the default shortcut;
+      // customize or disable the shortcut in settings if you want Find back.
+      if (this.getGroupableSelectedTabs().length < 1) {
         return;
       }
       event.preventDefault();
@@ -6000,11 +6001,12 @@ class AdvancedTabGroups {
           try {
             const atg = globalThis.advancedTabGroups;
             const tabs = atg?.getGroupableSelectedTabs?.() || [];
-            const show = tabs.length >= 2;
+            const show = tabs.length >= 1;
             item.hidden = !show;
             if (show) {
               const shortcut = atg?.getGroupShortcut?.() || AdvancedTabGroups.GROUP_SELECTED_DEFAULT_SHORTCUT;
-              item.setAttribute("label", `Group ${tabs.length} Selected Tabs (${shortcut})`);
+              const noun = tabs.length === 1 ? "Tab" : "Tabs";
+              item.setAttribute("label", `Group ${tabs.length} Selected ${noun} (${shortcut})`);
             }
           } catch (_) {}
         });

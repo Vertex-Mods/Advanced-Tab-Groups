@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.1 - 2026-10-31 - Single-tab grouping
+
+- The group-selected-tabs shortcut and tab menu entry now work with a single selected tab too (previously 2+ required). A single ungrouped tab creates a new group; a tab already in a group is a no-op.
+- Note: with one tab selected the default `Ctrl/Cmd+Shift+G` now takes precedence over Find Previous; customize or disable the shortcut in settings if you want Find back.
+
 ## 3.12.0 - 2026-10-30 - Group selected tabs shortcut (fixes #160)
 
 - Added a customizable keyboard shortcut to group the currently selected tabs instantly (default `Ctrl+Shift+G`, `Ctrl` means `Cmd` on Mac, so `Cmd+Shift+G` works there too).
